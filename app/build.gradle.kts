@@ -8,6 +8,7 @@ plugins {
     id("org.jetbrains.kotlinx.kover")
 }
 
+val researchLab = providers.gradleProperty("opencinecam.researchLab").orNull == "true"
 val profileBuildTypes = setOf("benchmarkRelease", "nonMinifiedRelease")
 
 android {
@@ -16,6 +17,7 @@ android {
 
     defaultConfig {
         applicationId = "com.librestatic.opencinecam"
+        manifestPlaceholders["appLabel"] = "OpenCineCam"
         minSdk = 29
         targetSdk = 37
         // -Popencinecam.versionCode wins; CI derives it from the run number plus an offset
@@ -42,8 +44,9 @@ android {
             ndk {
                 abiFilters += listOf("arm64-v8a", "x86_64")
             }
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            applicationIdSuffix = if (researchLab) ".researchlab" else ".debug"
+            versionNameSuffix = if (researchLab) "-research" else "-debug"
+            if (researchLab) manifestPlaceholders["appLabel"] = "OpenCineCam Lab"
         }
         release {
             isMinifyEnabled = true

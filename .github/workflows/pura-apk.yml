@@ -3,9 +3,7 @@ name: Pura test APK
 on:
   workflow_dispatch:
   push:
-    branches: [pura-apk-build]
-    paths:
-      - '.github/workflows/pura-apk.yml'
+    branches: [pura-apk-build, research/self-exploring-lab]
 
 permissions:
   contents: read
@@ -48,7 +46,13 @@ jobs:
           echo "ANDROID_HOME=$sdk_dir" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$sdk_dir" >> "$GITHUB_ENV"
       - name: Build debug APK
-        run: ./gradlew --no-daemon --dependency-verification=strict --console=plain :app:assembleDebug --stacktrace
+        shell: bash
+        run: |
+          args=()
+          if [[ "$GITHUB_REF_NAME" == research/self-exploring-lab ]]; then
+            args+=(-Popencinecam.researchLab=true)
+          fi
+          ./gradlew --no-daemon --dependency-verification=strict --console=plain "${args[@]}" :app:assembleDebug --stacktrace
       - name: Verify APK and calculate hash
         shell: bash
         run: |
@@ -58,11 +62,21 @@ jobs:
           build_tools="$ANDROID_SDK_ROOT/build-tools/37.0.0"
           "$build_tools/apksigner" verify --verbose "$apk"
           mkdir -p apk-output
-          cp "$apk" apk-output/OpenCineCam-Pura-debug.apk
-          (cd apk-output && sha256sum OpenCineCam-Pura-debug.apk > SHA256SUMS)
+          name=OpenCineCam-Pura-debug.apk
+          if [[ "$GITHUB_REF_NAME" == research/self-exploring-lab ]]; then
+            "$build_tools/aapt" dump badging "$apk" > apk-output/manifest.txt
+            grep -F "package: name='com.librestatic.opencinecam.researchlab'" apk-output/manifest.txt
+            name=OpenCineCam-Research-Lab.apk
+          fi
+          cp "$apk" "apk-output/$name"
+          (cd apk-output && sha256sum "$name" > SHA256SUMS)
       - uses: actions/upload-artifact@v7
         with:
-          name: OpenCineCam-Pura-debug
+          name: ${{ github.ref_name == 'research/self-exploring-lab' && 'OpenCineCam-Research-Lab' || 'OpenCineCam-Pura-debug' }}
           path: apk-output/
           if-no-files-found: error
           retention-days: 7
+
+      - name: Run host regression tests
+        if: github.ref_name == 'research/self-exploring-lab'
+        run: ./gradlew --no-daemon --dependency-verification=strict --console=plain :core:model:test :camera:testDebugUnitTest :media:testDebugUnitTest :app:testDebugUnitTest

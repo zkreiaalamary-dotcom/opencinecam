@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="research_lab_title">مختبر التصوير</string>
+    <string name="research_lab_description">وجّه الكاميرا نحو مشهد ثابت ومضاء جيدًا. يلتقط المختبر مقاطع قصيرة من دون صوت ويحفظها مع القياسات داخل التطبيق.</string>
+    <string name="research_lab_ready">المختبر جاهز للتجربة.</string>
+    <string name="research_lab_start">ابدأ أو استأنف</string>
+    <string name="research_lab_new">ابدأ جلسة جديدة</string>
+    <string name="research_lab_stop">أوقف التجارب</string>
+    <string name="research_lab_stopping">يجري إنهاء التجربة الحالية وتحرير الكاميرا…</string>
+    <string name="research_lab_preparing">يجري فحص قدرات الكاميرا…</string>
+    <string name="research_lab_export">صدّر الأدلة بصيغة ZIP</string>
+    <string name="research_lab_exporting">يجري تصدير الأدلة…</string>
+    <string name="research_lab_exported">تم حفظ حزمة الأدلة.</string>
+    <string name="research_lab_no_evidence">شغّل تجربة واحدة على الأقل قبل التصدير.</string>
+</resources>

@@ -111,6 +111,16 @@ fun CameraRootScreen(splash: SplashHandoff = SplashHandoff(onScreen = false), on
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     val cameraAccess = rememberPermissionAccess(Manifest.permission.CAMERA) { permissionGranted = it }
+    val onboardingStore = remember(context) { OnboardingStore(context) }
+    val navigation = rememberCameraRootNavigation(onboardingStore)
+    var labOpen by rememberSaveable { mutableStateOf(false) }
+    var labCamera by rememberSaveable { mutableStateOf<String?>(null) }
+    val labBuild = context.packageName.endsWith(".researchlab")
+    if (labBuild && labOpen && permissionGranted) {
+        LaunchedEffect(Unit) { onReady() }
+        com.librestatic.opencinecam.research.ResearchLabScreen(labCamera) { labOpen = false }
+        return
+    }
     val binder = rememberCaptureServiceBinder(permissionGranted)
     var audioPermissionGranted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
@@ -119,8 +129,6 @@ fun CameraRootScreen(splash: SplashHandoff = SplashHandoff(onScreen = false), on
         audioPermissionGranted = it
         binder?.refreshAudioCapabilities()
     }
-    val onboardingStore = remember(context) { OnboardingStore(context) }
-    val navigation = rememberCameraRootNavigation(onboardingStore)
     val onboardingDone = navigation.onboardingDone
     // OCC-PLAN-071: the qualification step opened from the mode selector or Settings, and the mode to return to.
     var rawStepOpen by rememberSaveable { mutableStateOf(false) }
@@ -265,6 +273,10 @@ fun CameraRootScreen(splash: SplashHandoff = SplashHandoff(onScreen = false), on
                             activeCameraId = state.selectedCameraId,
                             onBack = navigation::backToSettingsHome,
                             liveState = state,
+                            onOpenResearchLab = if (labBuild && permissionGranted && state.phase != CameraUiPhase.CAPTURING &&
+                                state.phase != CameraUiPhase.RECORDING && !state.recordingFinalizing) {
+                                { id -> labCamera = id; labOpen = true }
+                            } else null,
                         )
                         }
                     } else if (settingsPage == SettingsPage.STORAGE_BENCHMARK) {

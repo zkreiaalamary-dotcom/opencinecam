@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="research_lab_title">Research Lab</string>
+    <string name="research_lab_description">Point the camera at a well-lit, still scene. The lab makes short, silent recordings and keeps the clips and measurements privately on this phone.</string>
+    <string name="research_lab_ready">Ready for an experiment.</string>
+    <string name="research_lab_start">Start or resume</string>
+    <string name="research_lab_new">Start a new run</string>
+    <string name="research_lab_stop">Stop experiments</string>
+    <string name="research_lab_stopping">Finishing the current experiment and releasing the camera…</string>
+    <string name="research_lab_preparing">Reading camera capabilities…</string>
+    <string name="research_lab_export">Export evidence ZIP</string>
+    <string name="research_lab_exporting">Exporting evidence…</string>
+    <string name="research_lab_exported">Evidence ZIP saved.</string>
+    <string name="research_lab_no_evidence">Run at least one experiment before exporting evidence.</string>
+</resources>

@@ -119,6 +119,7 @@ internal fun CameraCapabilitiesScreen(
     loadMain10Check: ((Context) -> Main10FileCheck?)? = null,
     loadDeviceProfile: ((Context, String) -> QuirkResolution)? = null,
     loadMotionSensors: ((Context) -> List<MotionSensorFact>)? = null,
+    onOpenResearchLab: ((String?) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val inventory by produceState<List<CameraInventory>?>(null, context) {
@@ -240,6 +241,13 @@ internal fun CameraCapabilitiesScreen(
                     modifier = Modifier.heightIn(min = 48.dp).testTag("capabilities-export"),
                 ) { Text(stringResource(R.string.caps_export), color = SettingsAccent) }
             } })
+        }
+        onOpenResearchLab?.let { open ->
+            item(key = "research-lab") {
+                TextButton(onClick = { open(selected?.cameraId ?: activeCameraId) }, modifier = Modifier.testTag("open-research-lab")) {
+                    Text(stringResource(R.string.research_lab_title))
+                }
+            }
         }
         when {
             loaded == null -> item(key = "loading") { Text(stringResource(R.string.caps_loading), color = SettingsMuted) }

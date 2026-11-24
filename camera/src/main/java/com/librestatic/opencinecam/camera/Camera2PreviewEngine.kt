@@ -514,6 +514,7 @@ class Camera2PreviewEngine(
     context: Context,
     private val ownerAdmission: CaptureOwnerAdmission = CaptureOwnerAdmission.processGlobal,
     internal val deviceQuirks: DeviceQuirks = DeviceQuirks.None,
+    internal val researchObserver: Camera2ResearchObserver? = null,
 ) : AutoCloseable {
     internal val manager = context.getSystemService(CameraManager::class.java)
     internal val appContext = context.applicationContext

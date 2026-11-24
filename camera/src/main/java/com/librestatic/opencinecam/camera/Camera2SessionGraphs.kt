@@ -915,6 +915,9 @@ internal fun Camera2PreviewEngine.previewCaptureCallback(
                 armedAnchors?.let { anchors -> result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)?.let(anchors::frame) }
                 if (armedSession == null || armedSession !== this@previewCaptureCallback.session) return
                 val sensorTimestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)
+                researchObserver?.let { observer ->
+                    runCatching { observer.onResult(request, result, sensorTimestamp) }
+                }
                 val processFully = highSpeedGate?.shouldProcessFully(sensorTimestamp) ?: true
                 if (processFully) {
                     noteLensForFrame(result)
