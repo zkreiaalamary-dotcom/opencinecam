@@ -40,6 +40,7 @@ internal class LabVideo(
         var reader: ImageReader? = null
         try {
             val reportedBuffer = AtomicBoolean()
+            val reportedSinkError = AtomicBoolean()
             val size = Size(case.width, case.height)
             val sink = ImageReader.newInstance(640, 360, ImageFormat.PRIVATE, 3)
             reader = sink
@@ -57,7 +58,9 @@ internal class LabVideo(
                             }
                         }
                     }
-                }.onFailure { signals.notice("preview_sink_error", json("error" to it.toString().take(300))) }
+                }.onFailure {
+                    if (reportedSinkError.compareAndSet(false, true)) signals.notice("preview_sink_error", json("error" to it.toString().take(300)))
+                }
             }, Handler(thread.looper))
             val log = profiles.logProfile(case)
             val descriptor = profiles.descriptor
@@ -76,7 +79,7 @@ internal class LabVideo(
                 sourceSize = size, sensorOrientationDegrees = descriptor.sensorOrientation,
                 deviceOrientationDegrees = 0, lensFacing = descriptor.lensFacing, mode = RecordingGeometryMode.NATIVE_RASTER,
             )
-            val bitrate = if (size.width >= 3840) 45_000_000 else 20_000_000
+            val bitrate = 20_000_000
             journal.notice(json("event" to "encoder_requested", "bitrate" to bitrate, "audio" to false,
                 "geometry" to RecordingGeometryMode.NATIVE_RASTER.name, "sourcePath" to log?.sourcePath?.name,
                 "sourceRequestedDynamicRange" to log?.sourcePath?.dynamicRange,
@@ -112,7 +115,6 @@ internal class LabVideo(
             }
             val evidence = engine.consumeLastOpenCineLogEvidence()
             evidence?.let { journal.notice(it.toResearchJson()) }
-            return inspectClip(case, journal)
         } finally {
             try {
                 engine.closeAsync().get(STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -126,6 +128,7 @@ internal class LabVideo(
                 thread.join(STOP_TIMEOUT_MS)
             }
         }
+        return inspectClip(case, journal)
     }
 
     private fun await(
@@ -206,9 +209,13 @@ private fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVer
         "fileSignalCheck" to main10?.status?.name, "fileSignalReason" to main10?.reasonCode,
         "samplePtsUsInExtractorOrder" to JSONArray(probe.pts), "observedFileFps" to fps,
         "maxSampleGapUs" to pts.zipWithNext { a, b -> b - a }.maxOrNull(), "durationFromPtsUs" to span,
-        "containerBytes" to journal.clip.length(), "decoderCheck" to "NOT_RUN", "imageQuality" to "NOT_MEASURED",
+        "containerBytes" to journal.clip.length(),
     ))
-    return if (issue == null) LabVerdict.OBSERVED to null else LabVerdict.MISMATCH to issue
+    val decode = pts.getOrNull(pts.size / 2)?.let { inspectDecodedFrame(journal.clip, it) }
+    journal.notice(json("event" to "decoded_frame_and_clip_hash", "decoder" to decode,
+        "clipSha256" to clipSha256(journal.clip), "effectiveSourcePrecision" to "UNKNOWN"))
+    val verdict = issue ?: if (decode?.optString("status") == "DECODED") null else "A decoded frame could not be verified."
+    return if (verdict == null) LabVerdict.OBSERVED to null else LabVerdict.MISMATCH to verdict
 }
 
 private data class LabClip(val format: MediaFormat, val pts: List<Long>)

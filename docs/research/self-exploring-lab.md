@@ -12,7 +12,7 @@ This branch starts from the Pura build commit `97021442`. At that point the diff
 | Configure and start | `Camera2PreviewEngine.startPreview`, regular or constrained paths in `Camera2SessionGraphs` | Preview readiness, actual request/result FPS range, sensor frame numbers and timestamps, graph loss events |
 | Render | The production GLES `OpenCineLogGpuPipeline` for SDR, OCLog2, HLG and HDR10 | GPU submission PTS, source dataspace when present, YCbCr conversion or driver delegation, EGL target depth, OCLog2 shader hash, preview-sink HardwareBuffer description |
 | Encode and mux | `startVideo` or `startOpenCineLogVideo`, production Surface encoder, `EncodedSampleListener` | Selected codec and fallbacks, input track format, sample bytes and PTS, finalization and descriptor retirement |
-| Inspect published bytes | Android `MediaExtractor` and production `Main10FileChecks` | Container format, sample PTS cadence and gaps, color signaling, result against requested raster and codec |
+| Inspect published bytes | Android `MediaExtractor` and production `Main10FileChecks` | Container format, sample PTS cadence and gaps, color signaling, result against requested raster and codec, one platform-decoded thumbnail check, and clip SHA-256 |
 | Isolate RAW stages | Production `RawVideoQualifier`, with RAM camera stage followed where possible by its JNI block-pack stage | Per-stage RAW reports, capabilities, progress and native encoding results |
 
 ### Source history that constrains the experiments
@@ -34,7 +34,7 @@ The ZIP contains one directory per run with `run.json` and `inventory.json`. Eac
 
 ## Reading outcomes
 
-- **OBSERVED** means the specified check ran on the selected graph. A short clip that passes its MP4 checks provides cadence and file evidence. RAW stages provide camera or codec throughput evidence for a short window.
+- **OBSERVED** means the specified check ran on the selected graph. A short clip that passes its MP4 checks provides cadence, file and representative frame-decode evidence. RGB preview statistics may reflect Android display processing. RAW stages provide camera or codec throughput evidence for a short window.
 - **MISMATCH** means a recorded file differed from the requested codec, signal, raster or cadence.
 - **FAILED**, **INTERRUPTED**, and **STOPPED** retain the furthest journaled boundary or reason. A timeout is scoped to the stage and test settings.
 - Main10 signaling establishes file profile. A claim about effective sensor-to-file precision requires controlled chart capture, independent decoder observations and a matching source graph. The app's upstream [Resolve protocol](../color/oclog2-resolve-protocol.md) and `tools/qualify_main10_file.py` cover independent work.
