@@ -23,8 +23,30 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-37"
+      - name: Install Android SDK and native build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_dir="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$RUNNER_TEMP/android-sdk}}"
+          tools_dir="$sdk_dir/cmdline-tools/opencinecam-20"
+          archive="$RUNNER_TEMP/android-command-line-tools.zip"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://dl.google.com/android/repository/commandlinetools-linux-14742923_latest.zip \
+            --output "$archive"
+          echo "48833c34b761c10cb20bcd16582129395d121b27  $archive" | sha1sum --check
+          mkdir -p "$sdk_dir/cmdline-tools"
+          unzip -q "$archive" -d "$RUNNER_TEMP/opencinecam-sdk-tools"
+          mv "$RUNNER_TEMP/opencinecam-sdk-tools/cmdline-tools" "$tools_dir"
+          sdkmanager="$tools_dir/bin/sdkmanager"
+          if [[ ! -f "$sdk_dir/licenses/android-sdk-license" ]]; then
+            set +o pipefail
+            yes | "$sdkmanager" --sdk_root="$sdk_dir" --licenses >/dev/null
+            set -o pipefail
+          fi
+          "$sdkmanager" --sdk_root="$sdk_dir" --install --channel=3 \
+            "platforms;android-37" "build-tools;37.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+          echo "ANDROID_HOME=$sdk_dir" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk_dir" >> "$GITHUB_ENV"
       - name: Build debug APK
         run: ./gradlew --no-daemon --dependency-verification=strict --console=plain :app:assembleDebug --stacktrace
       - name: Verify APK and calculate hash
@@ -33,7 +55,7 @@ jobs:
           set -euo pipefail
           apk=app/build/outputs/apk/debug/app-debug.apk
           test -s "$apk"
-          build_tools="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          build_tools="$ANDROID_SDK_ROOT/build-tools/37.0.0"
           "$build_tools/apksigner" verify --verbose "$apk"
           mkdir -p apk-output
           cp "$apk" apk-output/OpenCineCam-Pura-debug.apk
