@@ -80,8 +80,9 @@ internal class LabSignals : Camera2PreviewListener, EncodedSampleListener, Camer
     override fun onRecordingFirstFrame(sensorTimestampNs: Long) =
         offer(LabStage.FIRST_GPU_FRAME, json("sensorTimestampNs" to sensorTimestampNs))
 
-    override fun onRecordingFrame(sensorTimestampNs: Long, presentationTimeNs: Long) =
+    override fun onRecordingFrame(sensorTimestampNs: Long, presentationTimeNs: Long) {
         gpuFrames.append(sensorTimestampNs, presentationTimeNs)
+    }
 
     override fun onTrack(video: Boolean, format: MediaFormat, rotationDegrees: Int) {
         if (video) offer(LabStage.RECORDER, json("event" to "muxer_track", "format" to format.toString(),
