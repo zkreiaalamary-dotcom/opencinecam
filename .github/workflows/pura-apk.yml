@@ -1,0 +1,46 @@
+name: Pura test APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [pura-apk-build]
+    paths:
+      - '.github/workflows/pura-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-37"
+      - name: Build debug APK
+        run: ./gradlew --no-daemon --dependency-verification=strict --console=plain :app:assembleDebug --stacktrace
+      - name: Verify APK and calculate hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          build_tools="$(find "$ANDROID_SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$build_tools/apksigner" verify --verbose "$apk"
+          mkdir -p apk-output
+          cp "$apk" apk-output/OpenCineCam-Pura-debug.apk
+          (cd apk-output && sha256sum OpenCineCam-Pura-debug.apk > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenCineCam-Pura-debug
+          path: apk-output/
+          if-no-files-found: error
+          retention-days: 7
