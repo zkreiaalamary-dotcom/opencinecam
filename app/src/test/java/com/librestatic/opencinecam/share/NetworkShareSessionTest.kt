@@ -128,13 +128,21 @@ class NetworkShareSessionTest {
             clock.advance(1_000)
             assertNull(session.tick())
 
+            // A response body can reach the client before the worker records its completion time.
+            // A non-activity request on this same keep-alive connection orders the two events.
+            fun awaitTransferCompletion() {
+                assertEquals(200, c.request("OPTIONS", "/").status)
+            }
+
             // Opening a take's folder counts.
             assertEquals(207, c.request("PROPFIND", "/$take/", mapOf("Depth" to "1")).status)
+            awaitTransferCompletion()
             clock.advance(NetworkShareSession.IDLE_STOP_MS - 1)
             assertNull(session.tick())
 
             // So does a GET that sends a body.
             assertEquals(206, c.request("GET", "/$take/${take}_000000.dng", mapOf("Range" to "bytes=0-9")).status)
+            awaitTransferCompletion()
             clock.advance(NetworkShareSession.IDLE_STOP_MS - 1)
             assertNull(session.tick())
         }
