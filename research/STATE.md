@@ -2,13 +2,15 @@
 
 2026-11-25 · Huawei Pura 80 Pro global LMR-LX9 · EMUI 15 · Android API 31.
 
-## Baseline
+[Handoff](HANDOFF.md) · [Analysis](ANALYSIS.md) · [Roadmap](ROADMAP.md) · [Evidence index](EVIDENCE.jsonl)
 
-- Source branch `research/self-exploring-lab` at `adc19ce1a8bc141885160b00c8bea83cca948787`. Its [existing handoff](../docs/research/agent-handoff.md) identifies `f02a4813d7157fb550437243c64c1818dbf0efb4` as the last built code. The source delta between those revisions contains two research documents. APK identity is absent from the run journal.
-- [EVIDENCE.jsonl](EVIDENCE.jsonl) is the digest-addressed index. The export contains 12 completed attempt records, eight valid AVC MP4s, two zero-byte placeholders and two preview-only attempts. Clip bytes, capability report and previous Pura Cinema evidence stay in their original locations.
-- `E-OCC-002` localizes the 1080p60 interval anomaly to Camera2 sensor timestamps. `E-OCC-007/008` reached camera callbacks after the engine dropped the unlisted UHD60 profile. `E-OCC-012` proves a specific HiSilicon HEVC configure refusal and successful AVC fallback.
-- Earlier Pura Cinema data changes the priority: `E-PURA-5799500` reports 59.920 fps in short recorder-only UHD HEVC Main; `E-PURA-5698009` reports UHD Main10 with a suspected half-repeat. `E-PURA-GEOM` records repeat-like geometry across independently decoded originals.
+- Branch base `adc19ce1a8bc141885160b00c8bea83cca948787` from `research/self-exploring-lab`. The [existing handoff](../docs/research/agent-handoff.md) identifies `f02a4813d7157fb550437243c64c1818dbf0efb4` as the last built code. Two documentation files are the only delta to the reviewed base. The archive supplies model/SDK/fingerprint and run metadata. APK build identity is absent.
+- Current evidence is complete for the supplied run: 12 attempts, eight valid MP4s (all AVC High 8-bit), two zero-byte placeholders, two preview-only attempts. Eight clip hashes and sample timing match Android extraction. A separate software decode sampled 55 frames. Lab summary closed on the attempt budget.
+- UHD60 `007/008`: the descriptor discarded the unlisted UHD60 tuple, then built a 1080p source. The recorder correctly rejected 4K geometry. Prior Pura recorder-only HEVC Main reached 59.920 fps in a short UHD file. Sustained operation in OpenCineCam is pending.
+- HEVC `012`: HiSilicon refused one exact configure request. Prior Pura HEVC Main files narrow recovery to the route and codec contract. Main10 was previously coded successfully, with near-repeat-half geometry in three independently audited originals.
+- 1080p60 `002`: one 30.247 ms sensor-origin interval, no duplicate PTS. HFR OCLog2 `011`: generic codec prep failure after camera results. Regular HLG-derived OCLog2 is gated by this API level and app policy.
+- Current positive OpenCineCam control is short UHD AVC at 24/25/30. The longest take is 10.036 s at UHD24. No new physical handset runs were made in this audit.
 
-## Next
+## Next decision
 
-Finish the code-level analysis and rank two first tests: carry the known-good recorder-only control into the lab, then isolate Main10 surface/format preparation and image geometry. Treat regular OCLog2 availability, source precision and sustained operation as independent questions.
+Apply `X-00` in the isolated lab, then run the recorder-only vs preview+recorder UHD60 comparison in `X-01`. Run `X-02` before more camera-dependent Main10 trials, and `X-03` before accepting any Main10 picture. Preserve unknown effective source depth until a controlled chart and independent decode establish it.
