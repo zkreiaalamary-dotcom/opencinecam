@@ -1,6 +1,8 @@
 # OpenCineCam Research Lab
 
-The Android lab runs short experiments through the production camera engine. Build it with `-Popencinecam.researchLab=true` and `:app:assembleDebug`. The APK identifies itself as **OpenCineCam Lab** with package `com.librestatic.opencinecam.researchlab`. It can install alongside both the Play and the ordinary debug packages. Open **Settings → Camera capabilities → Research Lab**. Select a camera on the capabilities screen to choose its ID, point it at a well-lit static scene, and start. The page holds the camera only during a user-initiated run. Back during a run requests a stop. The next Back returns to Camera capabilities.
+See the [agent handoff](agent-handoff.md) for the verified Pura evidence, source map, and development priorities.
+
+The Android lab runs short experiments through the production camera engine. Build it with `-Popencinecam.researchLab=true` and `:app:assembleDebug`. The APK identifies itself as **OpenCineCam Lab** with package `com.librestatic.opencinecam.researchlab`. It can install alongside both the Play and the ordinary debug packages. Open **Settings → About and diagnostics → Camera capabilities → Research Lab**. Select a camera on the capabilities screen to choose its ID, point it at a well-lit static scene, and start. The page holds the camera only during a user-initiated run. Back during a run requests a stop. The next Back returns to Camera capabilities.
 
 ## Source and decisions
 
