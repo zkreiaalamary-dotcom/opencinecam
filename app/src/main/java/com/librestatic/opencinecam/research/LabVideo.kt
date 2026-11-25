@@ -218,16 +218,23 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
         "maxSampleGapUs" to cadence.maxUs, "durationFromPtsUs" to cadence.spanUs,
         "p95GapUs" to cadence.p95Us, "p99GapUs" to cadence.p99Us, "longIntervals" to cadence.longIntervals,
         "duplicatePts" to cadence.repeatedPts, "sampleCount" to cadence.samples,
-        "containerBytes" to journal.clip.length(),
+        "containerBytes" to journal.clip.length(), "videoSampleBytes" to probe.sampleBytes,
+        "meanVideoPayloadBps" to fps?.let { probe.sampleBytes * 8.0 * it / pts.size },
     ))
-    val decode = pts.getOrNull(pts.size / 2)?.let { inspectDecodedFrame(journal.clip, it) }
+    val ordered = pts.sorted()
+    val times = listOf(2, 1, 3).mapNotNull { ordered.getOrNull(ordered.size * it / 4) }
+    val decode = inspectDecodedFrames(journal.clip, times)
     journal.notice(json("event" to "decoded_frame_and_clip_hash", "decoder" to decode,
         "clipSha256" to clipSha256(journal.clip), "effectiveSourcePrecision" to "UNKNOWN"))
-    val verdict = issue ?: if (decode?.optString("status") == "DECODED") null else "A decoded frame could not be verified."
-    return if (verdict == null) LabVerdict.OBSERVED to null else LabVerdict.MISMATCH to verdict
+    if (issue != null) return LabVerdict.MISMATCH to issue
+    if (decode.optString("status") != "DECODED") return LabVerdict.MISMATCH to "A decoded frame could not be verified."
+    if (decode.optString("geometryScreen").startsWith("REVIEW_")) {
+        return LabVerdict.REVIEW to "Near-repeated halves on the same axis. Verify against an asymmetric chart."
+    }
+    return LabVerdict.OBSERVED to null
 }
 
-private data class LabClip(val format: MediaFormat, val pts: List<Long>)
+private data class LabClip(val format: MediaFormat, val pts: List<Long>, val sampleBytes: Long)
 
 private fun readClip(clip: File): LabClip {
     val extractor = MediaExtractor()
@@ -239,11 +246,13 @@ private fun readClip(clip: File): LabClip {
         val format = extractor.getTrackFormat(index)
         extractor.selectTrack(index)
         val pts = mutableListOf<Long>()
+        var sampleBytes = 0L
         while (extractor.sampleTime >= 0 && pts.size < 4_096) {
+            sampleBytes += extractor.sampleSize
             pts += extractor.sampleTime
             if (!extractor.advance()) break
         }
-        LabClip(format, pts)
+        LabClip(format, pts, sampleBytes)
     } finally {
         extractor.release()
     }

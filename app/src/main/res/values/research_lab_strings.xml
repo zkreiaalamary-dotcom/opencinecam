@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <resources>
     <string name="research_lab_title">Research Lab</string>
-    <string name="research_lab_description">Point the camera at a well-lit, still scene. The lab makes short, silent recordings and keeps the clips and measurements privately on this phone.</string>
+    <string name="research_lab_description">Keep the phone steady. Use a well-lit target with four different corners and a moving marker. The lab makes short, silent recordings and keeps the clips and measurements privately on this phone.</string>
     <string name="research_lab_ready">Ready for an experiment.</string>
     <string name="research_lab_start">Start or resume</string>
     <string name="research_lab_new">Start a new run</string>

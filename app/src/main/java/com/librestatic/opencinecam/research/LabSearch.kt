@@ -5,7 +5,7 @@ package com.librestatic.opencinecam.research
 
 internal enum class LabPath { AVC, HEVC, LOG, HLG, HDR10, RAW_CAMERA, RAW_NATIVE, DIRECT_HEVC, DIRECT_HEVC_PREVIEW, CODEC_LEVEL_PAIR }
 internal enum class LabStage { REQUESTED, CAMERA, PREVIEW, FIRST_CAMERA_RESULT, RECORDER, FIRST_GPU_FRAME, FIRST_ENCODED, STOPPED, RELEASED, FILE, RAW }
-internal enum class LabVerdict { OBSERVED, MISMATCH, FAILED, INTERRUPTED, STOPPED, ADMITTED }
+internal enum class LabVerdict { OBSERVED, MISMATCH, FAILED, INTERRUPTED, STOPPED, ADMITTED, REVIEW }
 
 internal data class LabCase(
     val camera: String,

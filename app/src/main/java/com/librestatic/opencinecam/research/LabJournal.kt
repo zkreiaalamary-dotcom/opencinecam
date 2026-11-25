@@ -14,18 +14,18 @@ import java.util.zip.ZipOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal class LabJournal(private val directory: File) {
+internal class LabJournal private constructor(private val directory: File, revision: String? = null) {
     private val header = File(directory, "run.json")
     private val complete = File(directory, "summary.json")
     val finished: Boolean get() = complete.isFile
-    val compatible: Boolean
-        get() = readJson(header)?.let { it.optInt("schemaVersion") == VERSION &&
+    fun compatibleWith(revision: String): Boolean = readJson(header)?.let {
+            it.optInt("schemaVersion") == VERSION && it.optString("apkSourceRevision") == revision &&
             it.optString("fingerprint") == Build.FINGERPRINT } == true
 
     init {
         check(directory.isDirectory || directory.mkdirs()) { "Cannot create research directory" }
         if (!header.exists()) writeJson(header, json(
-            "schemaVersion" to VERSION, "model" to Build.MODEL, "manufacturer" to Build.MANUFACTURER,
+            "schemaVersion" to VERSION, "apkSourceRevision" to revision, "model" to Build.MODEL, "manufacturer" to Build.MANUFACTURER,
             "sdk" to Build.VERSION.SDK_INT, "fingerprint" to Build.FINGERPRINT,
             "createdEpochMs" to System.currentTimeMillis(),
         ))
@@ -109,11 +109,11 @@ internal class LabJournal(private val directory: File) {
     }
 
     companion object {
-        private const val VERSION = 1
+        private const val VERSION = 2
 
         fun latest(root: File): LabJournal? {
             val latest = root.listFiles().orEmpty().filter { File(it, "run.json").isFile }.maxByOrNull(File::getName)
-            return latest?.let(::LabJournal)
+            return latest?.let { LabJournal(it) }
         }
 
         fun exportAll(root: File, output: OutputStream) {
@@ -126,7 +126,7 @@ internal class LabJournal(private val directory: File) {
             }
         }
 
-        fun create(root: File) = LabJournal(File(root, "${System.currentTimeMillis()}-${UUID.randomUUID()}"))
+        fun create(root: File, revision: String) = LabJournal(File(root, "${System.currentTimeMillis()}-${UUID.randomUUID()}"), revision)
     }
 }
 

@@ -1,6 +1,6 @@
 # Handoff · Huawei Pura 80 Pro global
 
-**First action.** Read `X-00` and `X-01` in [ROADMAP.md](ROADMAP.md). Reproduce the Pura Cinema recorder-only UHD60 HEVC Main control on this global handset in the isolated lab, then add one camera preview output. Start an independent encoder-only differential if the target is Main10.
+**First action on the capture-probes branch.** Install the research APK and start a fresh run on logical back camera 0. Use [the field protocol](CAPTURE-PROBES.md) to interpret the direct UHD60 pair, HEVC level experiment, GPU preparation receipts and decoded geometry screen. The original observations below remain the baseline.
 
 | Question | What you can rely on | Evidence |
 |---|---|---|

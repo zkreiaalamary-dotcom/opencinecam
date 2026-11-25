@@ -11,6 +11,6 @@
 - 1080p60 `002`: one 30.247 ms sensor-origin interval, no duplicate PTS. HFR OCLog2 `011`: generic codec prep failure after camera results. Regular HLG-derived OCLog2 is gated by this API level and app policy.
 - Current positive OpenCineCam control is short UHD AVC at 24/25/30. The longest take is 10.036 s at UHD24. No new physical handset runs were made in this audit.
 
-## Next decision
+## Implementation and next decision
 
-Apply `X-00` in the isolated lab, then run the recorder-only vs preview+recorder UHD60 comparison in `X-01`. Run `X-02` before more camera-dependent Main10 trials, and `X-03` before accepting any Main10 picture. Preserve unknown effective source depth until a controlled chart and independent decode establish it.
+The branch `research/pura80-capture-probes` implements the short `X-01` direct HEVC pair, `X-00` source/encoder receipts, the UHD30 Main explicit-level arm of `X-02`, and an RGB8 repeated-half screen for `X-03`. Host tests exercise scheduling, cadence, format parity and the geometry screen. Hardware results for these changes are pending. Start one session on the global handset and follow [CAPTURE-PROBES.md](CAPTURE-PROBES.md). Reserve sustained recording, synthetic Main10 rendering, source precision and Log qualification for the subsequent evidence gates.

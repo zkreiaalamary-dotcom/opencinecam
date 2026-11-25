@@ -136,6 +136,8 @@ internal class LabSignals : Camera2PreviewListener, EncodedSampleListener, Camer
         }
     }
 
+    fun sensorCadence(targetFps: Int) = labCadence(cameraFrames.secondValues().map { it / 1_000 }, targetFps)
+
     fun snapshot() = json(
         "cameraResult" to latestMetadata?.toResearchJson(),
         "cameraFrameNumberAndSensorNs" to cameraFrames.snapshot(),
@@ -170,6 +172,9 @@ private class LabTimestamps {
         second[count] = b
         return count++ == 0
     }
+
+    @Synchronized
+    fun secondValues(): LongArray = second.copyOf(count)
 
     fun snapshot(): JSONArray {
         val rows = synchronized(this) { first.copyOf(count) to second.copyOf(count) }

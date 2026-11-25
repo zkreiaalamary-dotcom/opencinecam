@@ -195,7 +195,11 @@ internal class LabDirectRecorder(private val context: Context, private val check
                 throw LabRetirementFailure(error)
             } finally {
                 signals.drain(attempt)
+                val sensor = signals.sensorCadence(case.fps)
                 attempt.notice(signals.snapshot().put("event", "direct_capture_receipt")
+                    .put("sensorCadence", json("samples" to sensor.samples, "fps" to sensor.fps,
+                        "p95Us" to sensor.p95Us, "p99Us" to sensor.p99Us, "maxUs" to sensor.maxUs,
+                        "duplicateTimestamps" to sensor.repeatedPts, "longIntervals" to sensor.longIntervals))
                     .put("resultCount", results.get()).put("previewImagesDrained", previewFrames.get())
                     .put("failedCaptures", failedCaptures.get()).put("lostBuffers", lostBuffers.get())
                     .put("lastReportedPhysicalId", activeLens.get()).put("asyncError", fault.get()))
@@ -207,8 +211,8 @@ internal class LabDirectRecorder(private val context: Context, private val check
             results.get() == 0 -> "No Camera2 results during the recording."
             twoOutputs && previewFrames.get() == 0 -> "The second camera output delivered no observed images."
             failedCaptures.get() + lostBuffers.get() > 0 -> "Camera2 reported failed captures or lost output buffers."
-            else -> null
+            else -> signals.sensorCadence(case.fps).shortDirectIssue(case.fps)?.let { "Camera2 sensor timing: $it" }
         }
-        return if (file.first != LabVerdict.OBSERVED || mismatch == null) file else LabVerdict.MISMATCH to mismatch
+        return if (file.first == LabVerdict.MISMATCH || mismatch == null) file else LabVerdict.MISMATCH to mismatch
     }
 }

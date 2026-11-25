@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <resources>
     <string name="research_lab_title">مختبر التصوير</string>
-    <string name="research_lab_description">وجّه الكاميرا نحو مشهد ثابت ومضاء جيدًا. يلتقط المختبر مقاطع قصيرة من دون صوت ويحفظها مع القياسات داخل التطبيق.</string>
+    <string name="research_lab_description">ثبّت الهاتف وصوّر هدفًا مضاءً جيدًا، بزوايا أربع مختلفة وعلامة متحركة. يلتقط المختبر مقاطع قصيرة من دون صوت ويحفظها مع القياسات داخل التطبيق.</string>
     <string name="research_lab_ready">المختبر جاهز للتجربة.</string>
     <string name="research_lab_start">ابدأ أو استأنف</string>
     <string name="research_lab_new">ابدأ جلسة جديدة</string>

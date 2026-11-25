@@ -24,7 +24,7 @@ class LabJournalTest {
     fun recoveryPreservesSavedMilestoneAndLeavesCompletedAttemptIntact() {
         val root = folder.newFolder()
         val case = LabCase("0", LabPath.AVC, 1920, 1080, 30)
-        val journal = LabJournal.create(root)
+        val journal = LabJournal.create(root, "build-A")
         journal.begin(LabDecision(case, null, "control")).apply {
             event(LabStage.FILE, json("fps" to 30))
             result(LabVerdict.OBSERVED)
@@ -35,6 +35,8 @@ class LabJournalTest {
         }
 
         val reopened = requireNotNull(LabJournal.latest(root))
+        assertTrue(reopened.compatibleWith("build-A"))
+        assertEquals(false, reopened.compatibleWith("build-B"))
         reopened.recoverInterrupted()
         reopened.recoverInterrupted()
 

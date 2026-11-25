@@ -44,7 +44,11 @@ internal class ResearchLaboratory(
         try {
             checkBudget()
             val latest = LabJournal.latest(root)
-            val journal = latest?.takeIf { resume && !it.finished && it.compatible } ?: LabJournal.create(root)
+            val revision = context.getString(com.librestatic.opencinecam.R.string.research_lab_revision)
+            val build = if (revision == "local-unknown") {
+                "local-" + context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+            } else revision
+            val journal = latest?.takeIf { resume && !it.finished && it.compatibleWith(build) } ?: LabJournal.create(root, build)
             journal.recoverInterrupted()
             val manager = context.getSystemService(CameraManager::class.java)
             val scanner = Camera2PreviewEngine(context, deviceQuirks = DeviceQuirksProvider.lazy(context))
@@ -61,7 +65,7 @@ internal class ResearchLaboratory(
             val profiles = LabProfiles(manager, descriptor)
             val candidates = profiles.cases()
             journal.inventory(profiles.inventory(descriptors).put("nativeBlockPackAvailable", NativeRawCodec.available)
-                .put("apkSourceRevision", context.getString(com.librestatic.opencinecam.R.string.research_lab_revision)))
+                .put("apkSourceRevision", build))
             val search = LabSearch(candidates)
             val video = LabVideo(context, profiles, ::checkBudget)
             return explore(journal, search, video)

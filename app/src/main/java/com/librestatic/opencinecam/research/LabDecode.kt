@@ -6,36 +6,47 @@ package com.librestatic.opencinecam.research
 import android.media.MediaMetadataRetriever
 import java.io.File
 import java.security.MessageDigest
+import org.json.JSONArray
 import org.json.JSONObject
 
-/** A small decoded picture for smoke checking. Android may tone-map or convert it to eight-bit RGB. */
-internal fun inspectDecodedFrame(clip: File, timestampUs: Long): JSONObject {
+internal fun inspectDecodedFrames(clip: File, timesUs: List<Long>): JSONObject {
     val retriever = MediaMetadataRetriever()
     return try {
         retriever.setDataSource(clip.absolutePath)
-        val frame = retriever.getScaledFrameAtTime(timestampUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 96, 54)
-            ?: error("Android returned no decoded frame")
-        try {
-            val pixels = IntArray(frame.width * frame.height)
-            frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
-            var minimum = 255
-            var maximum = 0
-            var sum = 0L
-            for (pixel in pixels) {
-                val red = (pixel shr 16) and 255
-                val green = (pixel shr 8) and 255
-                val blue = pixel and 255
-                val luma = (54 * red + 183 * green + 19 * blue) shr 8
-                minimum = minOf(minimum, luma)
-                maximum = maxOf(maximum, luma)
-                sum += luma
+        val samples = JSONArray()
+        val scores = mutableListOf<LabHalfFrame>()
+        var representative: JSONObject? = null
+        for (timeUs in timesUs.distinct()) {
+            val sample = json("requestedTimestampUs" to timeUs)
+            samples.put(sample)
+            try {
+                val frame = retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST, 192, 192)
+                    ?: continue
+                try {
+                    val pixels = IntArray(frame.width * frame.height)
+                    frame.getPixels(pixels, 0, frame.width, 0, 0, frame.width, frame.height)
+                    val d = halfFrame(pixels, frame.width, frame.height)
+                    scores += d
+                    sample.put("halfX", d.horizontal.half).put("quarterX", d.horizontal.quarter)
+                        .put("halfY", d.vertical.half).put("quarterY", d.vertical.quarter)
+                        .put("width", frame.width).put("height", frame.height)
+                    if (representative == null) {
+                        val luma = pixels.map { p ->
+                            (54 * ((p ushr 16) and 255) + 183 * ((p ushr 8) and 255) + 19 * (p and 255)) ushr 8
+                        }
+                        representative = json("status" to "DECODED", "requestedTimestampUs" to timeUs,
+                            "width" to frame.width, "height" to frame.height, "rgb8LumaMin" to luma.minOrNull(),
+                            "rgb8LumaMax" to luma.maxOrNull(), "rgb8LumaMean" to luma.average())
+                    }
+                } finally {
+                    frame.recycle()
+                }
+            } catch (error: RuntimeException) {
+                sample.put("failure", error.toString().take(300))
             }
-            json("status" to "DECODED", "requestedTimestampUs" to timestampUs, "width" to frame.width,
-                "height" to frame.height, "rgb8LumaMin" to minimum, "rgb8LumaMax" to maximum,
-                "rgb8LumaMean" to sum.toDouble() / pixels.size, "scope" to "Platform-decoded preview; display transform may apply.")
-        } finally {
-            frame.recycle()
         }
+        (representative ?: json("status" to "UNVERIFIED")).put("geometryScreen", halfFrameScreen(scores))
+            .put("geometrySamples", samples).put("scope", "Platform display-decoded RGB8. Chart and independent decoder needed to qualify geometry.")
     } catch (error: Exception) {
         json("status" to "UNVERIFIED", "reason" to error.toString().take(300))
     } finally {
