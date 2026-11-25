@@ -8,6 +8,7 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.params.DynamicRangeProfiles
+import android.media.MediaRecorder
 import android.os.Build
 import android.util.Size
 import com.librestatic.opencinecam.camera.Camera2CameraDescriptor
@@ -21,6 +22,8 @@ internal class LabProfiles(manager: CameraManager, val descriptor: Camera2Camera
     private val caps = manager.getCameraCharacteristics(id)
     private val map = requireNotNull(caps.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP))
     private val textureSizes = map.getOutputSizes(SurfaceTexture::class.java).orEmpty().toSet()
+    private val recorderSizes = map.getOutputSizes(MediaRecorder::class.java).orEmpty().toSet()
+    private val privateSizes = map.getOutputSizes(ImageFormat.PRIVATE).orEmpty().toSet()
     private val rawSizes = runCatching { map.getOutputSizes(ImageFormat.RAW10).orEmpty().toList() }.getOrDefault(emptyList())
     private val hlgAdvertised = Build.VERSION.SDK_INT >= 33 &&
         caps.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)?.supportedProfiles
@@ -44,7 +47,16 @@ internal class LabProfiles(manager: CameraManager, val descriptor: Camera2Camera
             regular.firstOrNull { it.path == LabPath.HEVC && it.width == 3840 && it.fps == 30 },
         )
         val all = (seeds + regular + hfr + raw).distinctBy(LabCase::key)
-        return all + all.flatMap {
+        val probes = buildList {
+            val fixed60 = descriptor.targetFpsRanges.any { it.lower == 60 && it.upper == 60 }
+            if (Size(3840, 2160) in recorderSizes && fixed60) {
+                val direct = LabCase(id, LabPath.DIRECT_HEVC, 3840, 2160, 60, listed = false)
+                add(direct)
+                if (Size(1280, 720) in privateSizes) add(direct.copy(path = LabPath.DIRECT_HEVC_PREVIEW))
+            }
+            add(LabCase(id, LabPath.CODEC_LEVEL_PAIR, 3840, 2160, 30, listed = false))
+        }
+        return probes + all + all.flatMap {
             if (it.path == LabPath.RAW_CAMERA) listOf(it.copy(path = LabPath.RAW_NATIVE))
             else listOf(it.copy(previewOnly = true), it.copy(longer = true))
         }
@@ -81,6 +93,8 @@ internal class LabProfiles(manager: CameraManager, val descriptor: Camera2Camera
     fun inventory(cameras: List<Camera2CameraDescriptor>) = json(
         "selectedCamera" to id,
         "hlg10Advertised" to hlgAdvertised,
+        "mediaRecorderSizes" to JSONArray(recorderSizes.map { it.toString() }.sorted()),
+        "privateOutputSizes" to JSONArray(privateSizes.map { it.toString() }.sorted()),
         "raw10Sizes" to JSONArray(rawSizes.map { it.toString() }),
         "surfaceTextureSizes" to JSONArray(textureSizes.map { it.toString() }.sorted()),
         "outputFormats" to JSONArray(map.outputFormats.toList()),

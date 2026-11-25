@@ -60,7 +60,8 @@ internal class ResearchLaboratory(
             }
             val profiles = LabProfiles(manager, descriptor)
             val candidates = profiles.cases()
-            journal.inventory(profiles.inventory(descriptors).put("nativeBlockPackAvailable", NativeRawCodec.available))
+            journal.inventory(profiles.inventory(descriptors).put("nativeBlockPackAvailable", NativeRawCodec.available)
+                .put("apkSourceRevision", context.getString(com.librestatic.opencinecam.R.string.research_lab_revision)))
             val search = LabSearch(candidates)
             val video = LabVideo(context, profiles, ::checkBudget)
             return explore(journal, search, video)
@@ -103,6 +104,8 @@ internal class ResearchLaboratory(
         return try {
             val (verdict, reason) = when (case.path) {
                 LabPath.RAW_CAMERA, LabPath.RAW_NATIVE -> runRaw(case, attempt)
+                LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW -> LabDirectRecorder(context, ::checkBudget).run(case, attempt)
+                LabPath.CODEC_LEVEL_PAIR -> runCodecLevelPair(case, attempt, ::checkBudget)
                 else -> video.run(case, attempt)
             }
             attempt.result(verdict, reason)

@@ -70,6 +70,10 @@ internal class LabVideo(
                 videoProfile = if (log == null) profiles.videoProfile(case) else null,
             )
             await(signals, journal, START_TIMEOUT_MS, "preview or first Camera2 result") { signals.preview && signals.cameraResult }
+            val source = signals.gpuSource
+            if (source == null || source != Triple(case.width, case.height, case.fps)) {
+                return LabVerdict.MISMATCH to "Configured GPU input $source differs from requested ${case.width}x${case.height}@${case.fps}."
+            }
             if (case.previewOnly) {
                 await(signals, journal, 2_000, "preview observation", finishAtDeadline = true) { false }
                 journal.notice(signals.snapshot())
@@ -177,7 +181,7 @@ private fun OpenCineLogRecordingEvidence.toResearchJson() = json(
     "sceneGain" to sceneGain.toDouble(),
 )
 
-private fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVerdict, String?> {
+internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVerdict, String?> {
     val probe = readClip(journal.clip)
     val format = probe.format
     val mime = format.getString(MediaFormat.KEY_MIME)
@@ -187,19 +191,22 @@ private fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVer
         val kind = if (case.path == LabPath.HLG) Main10TakeKind.HLG else Main10TakeKind.LOG
         Main10FileChecks.evaluate(kind, signal, journal.clip.name, System.currentTimeMillis()).fileSignal
     } else null
-    val pts = probe.pts.sorted()
-    val span = if (pts.size >= 2) pts.last() - pts.first() else 0L
-    val fps = if (span > 0) (pts.size - 1) * 1_000_000.0 / span else null
+    val pts = probe.pts
+    val cadence = labCadence(pts, case.fps)
+    val fps = cadence.fps
+    val directIssue = if (case.path == LabPath.DIRECT_HEVC || case.path == LabPath.DIRECT_HEVC_PREVIEW)
+        cadence.shortDirectIssue(case.fps) else null
     val issue = when {
         fps == null || pts.size < 2 -> "No usable video cadence in the MP4."
         format.intOrNull(MediaFormat.KEY_WIDTH) != case.width ||
             format.intOrNull(MediaFormat.KEY_HEIGHT) != case.height -> "Encoded raster differs from the request."
+        directIssue != null -> directIssue
         main10 != null && main10.status != QualificationStatus.PASS -> "Main10 file check: ${main10.reasonCode}"
         case.path == LabPath.HDR10 && (signal.colorStandard != "BT.2020" || signal.colorTransfer != "PQ") -> "PQ/BT.2020 tags missing."
-        case.path == LabPath.HEVC && mime != MediaFormat.MIMETYPE_VIDEO_HEVC -> "Requested HEVC differs from the MP4 codec."
+        case.path in setOf(LabPath.HEVC, LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW) && mime != MediaFormat.MIMETYPE_VIDEO_HEVC -> "Requested HEVC differs from the MP4 codec."
         case.path == LabPath.AVC && mime != MediaFormat.MIMETYPE_VIDEO_AVC -> "Requested AVC differs from the MP4 codec."
         kotlin.math.abs(fps - case.fps) > case.fps * 0.05 -> "File cadence differs from the target by more than 5%."
-        pts.zipWithNext().any { (a, b) -> b <= a || b - a > 1_500_000.0 / case.fps } -> "File contains a repeated PTS or a cadence gap."
+        cadence.repeatedPts > 0 || cadence.longIntervals > 0 -> "File contains a repeated PTS or a cadence gap."
         else -> null
     }
     journal.event(LabStage.FILE, json(
@@ -208,7 +215,9 @@ private fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVer
         "codedBitDepthFromProfile" to signal.bitDepth, "effectiveSourcePrecision" to "UNKNOWN",
         "fileSignalCheck" to main10?.status?.name, "fileSignalReason" to main10?.reasonCode,
         "samplePtsUsInExtractorOrder" to JSONArray(probe.pts), "observedFileFps" to fps,
-        "maxSampleGapUs" to pts.zipWithNext { a, b -> b - a }.maxOrNull(), "durationFromPtsUs" to span,
+        "maxSampleGapUs" to cadence.maxUs, "durationFromPtsUs" to cadence.spanUs,
+        "p95GapUs" to cadence.p95Us, "p99GapUs" to cadence.p99Us, "longIntervals" to cadence.longIntervals,
+        "duplicatePts" to cadence.repeatedPts, "sampleCount" to cadence.samples,
         "containerBytes" to journal.clip.length(),
     ))
     val decode = pts.getOrNull(pts.size / 2)?.let { inspectDecodedFrame(journal.clip, it) }

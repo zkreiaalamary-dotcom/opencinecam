@@ -145,6 +145,7 @@ internal fun Camera2PreviewEngine.startGpuVideo(
                     listener?.onFailure(code, message, true)
                 }
             }
+            pipeline.attachResearchObserver(researchObserver)
             logPipeline = pipeline
             analysisPipeline = pipeline
             synchronizeSubjectOutput()

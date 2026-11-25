@@ -3,9 +3,9 @@
 
 package com.librestatic.opencinecam.research
 
-internal enum class LabPath { AVC, HEVC, LOG, HLG, HDR10, RAW_CAMERA, RAW_NATIVE }
+internal enum class LabPath { AVC, HEVC, LOG, HLG, HDR10, RAW_CAMERA, RAW_NATIVE, DIRECT_HEVC, DIRECT_HEVC_PREVIEW, CODEC_LEVEL_PAIR }
 internal enum class LabStage { REQUESTED, CAMERA, PREVIEW, FIRST_CAMERA_RESULT, RECORDER, FIRST_GPU_FRAME, FIRST_ENCODED, STOPPED, RELEASED, FILE, RAW }
-internal enum class LabVerdict { OBSERVED, MISMATCH, FAILED, INTERRUPTED, STOPPED }
+internal enum class LabVerdict { OBSERVED, MISMATCH, FAILED, INTERRUPTED, STOPPED, ADMITTED }
 
 internal data class LabCase(
     val camera: String,
@@ -31,6 +31,24 @@ internal class LabSearch(private val candidates: List<LabCase>) {
     fun next(history: List<LabResult>): LabDecision? {
         val seen = history.map { it.attempt.key }.toSet()
         val pending = candidates.filterNot { it.key in seen }
+        // Reserve the causal controls before adaptive neighbours consume the run budget.
+        val direct = pending.firstOrNull { it.path == LabPath.DIRECT_HEVC }
+        if (direct != null) return LabDecision(direct, null, "X-01: measure the regular recorder-only UHD60 graph.")
+        val paired = pending.firstOrNull { it.path == LabPath.DIRECT_HEVC_PREVIEW }
+        if (paired != null) {
+            val control = history.lastOrNull { it.attempt == paired.copy(path = LabPath.DIRECT_HEVC) }
+            return LabDecision(paired, control?.id, "X-01: add one drained 720p camera output to the same recorder configuration.")
+        }
+        pending.firstOrNull { it.path == LabPath.CODEC_LEVEL_PAIR }?.let {
+            return LabDecision(it, null, "X-02: toggle only the explicit HEVC level on one named hardware encoder.")
+        }
+        val hasProbes = candidates.any { it.path == LabPath.CODEC_LEVEL_PAIR }
+        if (hasProbes) {
+            pending.firstOrNull { it.path == LabPath.HEVC && it.width == 3840 && it.fps == 30 && !it.longer && !it.previewOnly }
+                ?.let { return LabDecision(it, null, "Trace the production HEVC configure call and verify the resulting codec.") }
+            pending.firstOrNull { it.path == LabPath.LOG && it.hfr && !it.longer && !it.previewOnly }
+                ?.let { return LabDecision(it, null, "Localize the SDR-ISP HFR recording preparation failure.") }
+        }
         val last = history.lastOrNull {
             it.verdict != LabVerdict.INTERRUPTED && it.verdict != LabVerdict.STOPPED && !it.attempt.longer && !it.attempt.previewOnly
         }

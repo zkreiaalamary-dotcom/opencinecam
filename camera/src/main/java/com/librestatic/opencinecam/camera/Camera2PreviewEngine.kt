@@ -1409,6 +1409,7 @@ class Camera2PreviewEngine(
                     }
                 }
                 analysisPipeline = logPipeline
+                logPipeline?.attachResearchObserver(researchObserver)
                 synchronizeSubjectOutput()
                 try {
                     val callback = object : CameraDevice.StateCallback() {

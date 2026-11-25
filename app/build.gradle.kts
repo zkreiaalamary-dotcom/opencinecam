@@ -29,6 +29,8 @@ android {
             }
             ?: 122
         versionName = "2.0.1"
+        resValue("string", "research_lab_revision",
+            providers.environmentVariable("GITHUB_SHA").orNull?.takeIf { it.matches(Regex("[0-9a-f]{40}")) } ?: "local-unknown")
 
         ndk {
             abiFilters += listOf("arm64-v8a")

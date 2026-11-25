@@ -415,6 +415,26 @@ class OpenCineLogGpuPipeline(
     greyReference: OpenCineLogGreyReference = OpenCineLogGreyReference.NATIVE,
     private val onFailure: (String, String) -> Unit,
 ) : AutoCloseable {
+    @Volatile private var researchObserver: Camera2ResearchObserver? = null
+
+    internal fun attachResearchObserver(observer: Camera2ResearchObserver?) {
+        researchObserver = observer
+        observer?.onGpuSource(size.width, size.height, targetFps, sourcePath)
+    }
+
+    private inline fun <T> encoderStep(
+        step: String, codec: String? = null, format: MediaFormat? = null, operation: () -> T,
+    ): T {
+        val observer = researchObserver ?: return operation()
+        observer.onEncoderStep(step, "enter", codec, format, null)
+        return try {
+            operation().also { observer.onEncoderStep(step, "ok", codec, null, null) }
+        } catch (failure: Throwable) {
+            observer.onEncoderStep(step, "failed", codec, null, failure)
+            throw failure
+        }
+    }
+
     private val thread = HandlerThread("OpenCineLogGL").apply { start() }
     private val frameDiag = OpenCineLogFrameDiagnostics.createIfEnabled()
     private val viewfinderGapTrace = if (LensSwitchDiagnostics.enabled()) ViewfinderGapTrace() else null
@@ -986,10 +1006,12 @@ class OpenCineLogGpuPipeline(
                             error("No advertised ${MediaFormat.MIMETYPE_VIDEO_AVC} Surface encoder accepts ${encodedSize.width}x${encodedSize.height} at $encoderRate fps.")
                     }
                 }
-                var candidate = if (useHevc) requireNotNull(hevcCandidate)
+                var candidate = encoderStep("select_encoder") {
+                    if (useHevc) requireNotNull(hevcCandidate)
                     else if (passthroughSdr) avcCandidate()
                     else (if (hdr10Output) findHdr10Encoder(platformEncodedSize, targetFps) else findEncoder(platformEncodedSize, targetFps))
                         ?: error("No hardware ${MediaFormat.MIMETYPE_VIDEO_HEVC}${if (hdr10Output) " HDR10" else ""} Surface encoder accepts ${encodedSize.width}x${encodedSize.height} at $encoderRate fps.")
+                }
                 fun buildFormat(candidate: OpenCineLogEncoderCandidate) = MediaFormat.createVideoFormat(candidate.mime, encodedSize.width, encodedSize.height).apply {
                     setInteger(MediaFormat.KEY_PROFILE, candidate.profile)
                     // OMX AVC requires the advertised level whenever a profile is supplied.
@@ -1026,12 +1048,12 @@ class OpenCineLogGpuPipeline(
                 var format = buildFormat(candidate)
                 check(!preparation.isCancelled && !closed.get()) { "Recording preparation was cancelled" }
                 val ownedOutput = requireNotNull(preparedOutput)
-                var codec = MediaCodec.createByCodecName(candidate.codecName)
+                var codec = encoderStep("codec_create", candidate.codecName) { MediaCodec.createByCodecName(candidate.codecName) }
                 var codecConfigured = false
                 if (useHevc) {
                     // A hardware HEVC encoder may still refuse the exact format: retry once with H.264.
                     try {
-                        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                        encoderStep("configure", candidate.codecName, format) { codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE) }
                         codecConfigured = true
                     } catch (failure: Exception) {
                         runCatching { codec.release() }
@@ -1039,7 +1061,7 @@ class OpenCineLogGpuPipeline(
                         android.util.Log.w("OpenCineLogGpuPipeline", requireNotNull(codecFallbackReason))
                         candidate = avcCandidate()
                         format = buildFormat(candidate)
-                        codec = MediaCodec.createByCodecName(candidate.codecName)
+                        codec = encoderStep("codec_create", candidate.codecName) { MediaCodec.createByCodecName(candidate.codecName) }
                     }
                 }
                 var codecSurface: Surface? = null
@@ -1048,10 +1070,14 @@ class OpenCineLogGpuPipeline(
                 var preparedDrain: Thread? = null
                 var codecStarted = false
                 val active = try {
-                    if (!codecConfigured) codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                    codecSurface = codec.createInputSurface()
+                    if (!codecConfigured) encoderStep("configure", candidate.codecName, format) {
+                        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    }
+                    codecSurface = encoderStep("input_surface", candidate.codecName) { codec.createInputSurface() }
                     // Own before configuration: a throwing setter must not hide a live muxer.
-                    muxer = MediaMuxer(ownedOutput.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                    muxer = encoderStep("muxer_create", candidate.codecName) {
+                        MediaMuxer(ownedOutput.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                    }
                     requireNotNull(muxer).setOrientationHint(geometry.containerRotationDegrees)
                     val captureEpoch = separateAudioClock ?: audio?.let { CaptureEpochClock(cameraTimestampRealtime, it.sampleRateHz, it.syncOffsetNs) }
                     embeddedAac = audio?.let {
@@ -1059,15 +1085,16 @@ class OpenCineLogGpuPipeline(
                             requireNotNull(aacCalibration), requireNotNull(captureEpoch), fileRetirement::noteFailure) { preparation.isCancelled || closed.get() }
                     }
                     check(!preparation.isCancelled && !closed.get()) { "Recording preparation was cancelled" }
-                    val eglSurface = createWindowSurface(
-                        if (passthroughSdr) requireNotNull(config8) else requireNotNull(config10),
-                        codecSurface,
-                        if (hlgOutput) hlgSurfaceAttributes(hdr10Output)
-                        else if (passthroughSdr || recordingLut != null) intArrayOf(EGL14.EGL_NONE) else {
-                            intArrayOf(EGL_GL_COLORSPACE_KHR, EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, EGL14.EGL_NONE)
-                        },
-                    )
-                    check(eglSurface != EGL14.EGL_NO_SURFACE) { "Encoder did not accept the EGL window surface." }
+                    val eglSurface = encoderStep("egl_window", candidate.codecName) {
+                        createWindowSurface(
+                            if (passthroughSdr) requireNotNull(config8) else requireNotNull(config10),
+                            requireNotNull(codecSurface),
+                            if (hlgOutput) hlgSurfaceAttributes(hdr10Output)
+                            else if (passthroughSdr || recordingLut != null) intArrayOf(EGL14.EGL_NONE) else {
+                                intArrayOf(EGL_GL_COLORSPACE_KHR, EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, EGL14.EGL_NONE)
+                            },
+                        ).also { check(it != EGL14.EGL_NO_SURFACE) { "Encoder did not accept the EGL window surface." } }
+                    }
                     encoderEglSurface = eglSurface
                     val takeGreyReference = if (passthroughSdr) OpenCineLogGreyReference.NATIVE else greyReference
                     val active = Recording(requireNotNull(ownedOutput), codec, codecSurface, muxer, candidate, geometry, embeddedAac, captureEpoch, minimumSensorTimestampNs, timelapse?.let(::TimelapseTimeline), projectRateOverride?.let(::ProjectFrameTimeline), onTimelapseProgress, onTimelapsePauseChanged, onEncodedProgress, onStopped, fileRetirement, recordingLut, onRecordingLutApplied,
@@ -1082,7 +1109,7 @@ class OpenCineLogGpuPipeline(
                         exposureCompensation = if (appliedFrameGain) ExposureCompensationTakeUsage(lensSplicedSha(hlgOutput, hdr10Output)) else null,
                         sampleListener = sampleListener?.let(::GuardedEncodedSampleListener))
                     recording = active
-                    codec.start()
+                    encoderStep("codec_start", candidate.codecName) { codec.start() }
                     codecStarted = true
                     check(!preparation.isCancelled && !closed.get()) { "Recording preparation was cancelled" }
                     embeddedAac?.start { failure ->

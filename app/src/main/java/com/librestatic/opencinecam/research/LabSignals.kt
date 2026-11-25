@@ -29,6 +29,21 @@ internal class LabSignals : Camera2PreviewListener, EncodedSampleListener, Camer
     private val cameraFrames = LabTimestamps()
     private var lastRangeAt = 0L
 
+    @Volatile var gpuSource: Triple<Int, Int, Int>? = null
+        private set
+
+    override fun onGpuSource(width: Int, height: Int, fps: Int, source: com.librestatic.opencinecam.camera.OpenCineLogSourcePath) {
+        gpuSource = Triple(width, height, fps)
+        notice("configured_gpu_source", json("width" to width, "height" to height, "targetFps" to fps,
+            "sourcePath" to source.name, "scope" to "Pipeline input configuration before the camera session"))
+    }
+
+    override fun onEncoderStep(step: String, state: String, codec: String?, format: MediaFormat?, failure: Throwable?) {
+        notice("gpu_encoder_step", json("step" to step, "state" to state, "codec" to codec,
+            "elapsedRealtimeNs" to android.os.SystemClock.elapsedRealtimeNanos(),
+            "requestedFormat" to format?.toString(), "failure" to failure?.toCodecFailure()))
+    }
+
     override fun onResult(request: CaptureRequest, result: TotalCaptureResult, sensorTimestampNs: Long?) {
         val frame = result.frameNumber
         if (sensorTimestampNs != null) cameraFrames.append(frame, sensorTimestampNs)
