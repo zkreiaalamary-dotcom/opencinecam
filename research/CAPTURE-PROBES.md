@@ -13,3 +13,13 @@ Install the debug APK from the **Pura test APK** workflow on this branch. Select
 Direct attempts require a listed recorder size and fixed AE range. The paired attempt also requires a listed PRIVATE preview size. Check inventory.json when an arm is missing. A four-second take must provide at least 3.5 seconds of sensor and file timing, each within 0.5% of target average, with no repeated timestamps or intervals over 1.5 periods. The file must decode and match HEVC and raster. The two-output arm requires delivered preview images. Inspect the reported physical ID and observed sample payload bitrate. A short-run observation leaves motion uniqueness and thermal endurance open. Advance to 30 and 120 seconds only after the moving marker and chart check out. The suite adds no product recording preset.
 
 Entry points are LabProfiles and LabSearch for admission and ordering, LabDirectRecorder and LabCodecLevelPair for isolated probes, LabVideo and LabSignals for evidence, and LabGeometry for picture screening. Production GPU instrumentation lives in OpenCineLogGpuPipeline.encoderStep. Compare with E-OCC-007/008/011/012, E-PURA-5792636/5799500 and E-PURA-GEOM in [the evidence index](EVIDENCE.jsonl).
+
+## Independent geometry replay
+
+Use Python 3.11+, FFmpeg and ffprobe on an exported MP4. The helper reads the video in coded orientation and prints its SHA-256, sample indices, four RGB distance measurements per frame and screen result. With `--controls`, it injects exact horizontal and vertical repeats in memory using the same decoded images.
+
+```sh
+python3 tools/check_lab_geometry.py --controls path/to/clip.mp4
+```
+
+`E-HOST-GEOM-01` exercised 24 decoded pictures across the eight archived AVC recordings. All eight originals produced NO_REPEAT_FLAG. All 16 injected clip variants flagged the correct axis. A naturally periodic target can trigger the same detector. Use the four different corners and compare the phone and host receipts.
