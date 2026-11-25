@@ -2,6 +2,8 @@
 
 **First action on the capture-probes branch.** Install the research APK and start a fresh run on logical back camera 0. Use [the field protocol](CAPTURE-PROBES.md) to interpret the direct UHD60 pair, HEVC level experiment, GPU preparation receipts and decoded geometry screen. The original observations below remain the baseline.
 
+**Verified lab APK.** Source `d0ffb123551cabc2968bd753941c87a77950e7c8`, version `2.0.1-research` (112). The [CI run](https://github.com/zkreiaalamary-dotcom/opencinecam/actions/runs/45696398083) built and signature-verified the research package and passed the four Gradle host test tasks. The [APK archive](https://github.com/zkreiaalamary-dotcom/opencinecam/actions/runs/45696398083/artifacts/15062001139) contains SHA256SUMS. Match the installed run's `apkSourceRevision` to this commit. The APK SHA-256 is `bbbb2734d81a20b0bc7af17f08a2b546432e1c9e8860e3b48e03ec7d839ac20f`. Evidence keys are `E-CI-CAPTURE-01` and `E-HOST-GEOM-01`.
+
 | Question | What you can rely on | Evidence |
 |---|---|---|
 | Does the OpenCineCam run prove UHD60 recording? | Its 4K60 profile was dropped before encode. A 1080p source was handed a UHD recording geometry. Separately, Pura Cinema measured 59.920 fps through one camera output for a short HEVC Main take, with no logged long intervals. | `E-OCC-007/008`, `E-PURA-5792636/5799500` |
@@ -24,4 +26,4 @@
 - **Source fidelity** · Can a verified 10-bit source reach the app on this build? The prior P010 rejection and RAW_SENSOR/YUV observations already constrain the next experiment. Test packing and black/white response before a RAW throughput or OCLog2 claim.
 - **Product strategy** · Qualify reliable UHD24/25/30 capture and stock-quality SDR grading first. Advance direct UHD60 and 1080p120 as independent modes. Treat Main10, regular OCLog2 and the regional stock path as separate gates.
 
-This branch is a research handoff based on the original lab branch. Evidence and thresholds apply to the stated graph. New phone testing and production code changes remain outside the completed investigation.
+The camera experiments in the supplied archive predate this build. The next hardware evidence should cover the short direct pair, actual file/sensor timing and the HEVC preparation receipts before changing product defaults.

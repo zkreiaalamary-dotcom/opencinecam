@@ -4,7 +4,7 @@
 
 [Handoff](HANDOFF.md) · [Analysis](ANALYSIS.md) · [Roadmap](ROADMAP.md) · [Evidence index](EVIDENCE.jsonl)
 
-- Branch base `adc19ce1a8bc141885160b00c8bea83cca948787` from `research/self-exploring-lab`. The [existing handoff](../docs/research/agent-handoff.md) identifies `f02a4813d7157fb550437243c64c1818dbf0efb4` as the last built code. Two documentation files are the only delta to the reviewed base. The archive supplies model/SDK/fingerprint and run metadata. APK build identity is absent.
+- Historical audit base `adc19ce1a8bc141885160b00c8bea83cca948787` from `research/self-exploring-lab`. The [existing handoff](../docs/research/agent-handoff.md) identifies `f02a4813d7157fb550437243c64c1818dbf0efb4` as its then-current built code. The archive supplies model/SDK/fingerprint and run metadata. The original archive omits its APK build identity.
 - Current evidence is complete for the supplied run: 12 attempts, eight valid MP4s (all AVC High 8-bit), two zero-byte placeholders, two preview-only attempts. Eight clip hashes and sample timing match Android extraction. A separate software decode sampled 55 frames. Lab summary closed on the attempt budget.
 - UHD60 `007/008`: the descriptor discarded the unlisted UHD60 tuple, then built a 1080p source. The recorder correctly rejected 4K geometry. Prior Pura recorder-only HEVC Main reached 59.920 fps in a short UHD file. Sustained operation in OpenCineCam is pending.
 - HEVC `012`: HiSilicon refused one exact configure request. Prior Pura HEVC Main files narrow recovery to the route and codec contract. Main10 was previously coded successfully, with near-repeat-half geometry in three independently audited originals.
@@ -14,3 +14,5 @@
 ## Implementation and next decision
 
 The branch `research/pura80-capture-probes` implements the short `X-01` direct HEVC pair, `X-00` source/encoder receipts, the UHD30 Main explicit-level arm of `X-02`, and an RGB8 repeated-half screen for `X-03`. Host tests exercise scheduling, cadence, format parity and the geometry screen. Hardware results for these changes are pending. Start one session on the global handset and follow [CAPTURE-PROBES.md](CAPTURE-PROBES.md). Reserve sustained recording, synthetic Main10 rendering, source precision and Log qualification for the subsequent evidence gates.
+
+The installable revision is `d0ffb123551cabc2968bd753941c87a77950e7c8`. APK signature, package identity, archive digest and four successful Gradle host-test tasks are recorded in `E-CI-CAPTURE-01`. Python tooling discovery ran 156 tests with 4 skips. See [the verified build](https://github.com/zkreiaalamary-dotcom/opencinecam/actions/runs/45696398083) and [field handoff](HANDOFF.md). No handset capture is attributed to this verification.
