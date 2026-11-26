@@ -235,6 +235,8 @@ private fun decodeCodedLumaFrames(
             "rampPrecision" to rampMetrics?.let {
                 json(
                     "declaredBitDepth" to it.declaredBitDepth,
+                    "decoderOutputBitDepth" to it.declaredBitDepth,
+                    "decoderTruncatedTo8Bit" to (it.declaredBitDepth < 10),
                     "sampleCount" to it.sampleCount,
                     "distinctValues" to it.distinctValues,
                     "minPositiveStep" to it.minPositiveStep,

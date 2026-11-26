@@ -219,6 +219,43 @@ internal class ResearchLaboratory(
             )
         }
 
+        fun publishProgress(
+            stageLabel: String,
+            historySnapshot: List<LabResult>,
+            remainingPlanned: Int,
+            hypothesis: String?,
+            sample: ThermalSample?,
+            power: PowerProfileSnapshot,
+            inThermalPause: Boolean = false,
+            completed: Boolean = false,
+        ) {
+            val completedCount = historySnapshot.count { it.verdict != LabVerdict.STOPPED && it.verdict != LabVerdict.INTERRUPTED }
+            val skippedCount = skippedKeys.size
+            val attemptNum = if (completed || remainingPlanned == 0) completedCount else completedCount + 1
+            val socTempC = sample?.sysZones?.get("soc_thermal")?.let(::normalizeSysZoneC)
+            onProgress?.invoke(
+                LabUiProgress(
+                    stageLabel = stageLabel,
+                    attemptNumber = attemptNum,
+                    maxAttempts = (completedCount + remainingPlanned).coerceAtLeast(1),
+                    completedAttempts = completedCount,
+                    remainingPlanned = remainingPlanned,
+                    skippedAttempts = skippedCount,
+                    completed = completed,
+                    hypothesis = hypothesis,
+                    confirmedHypotheses = knowledge.confirmedCount(),
+                    totalHypotheses = knowledge.totalHypotheses(),
+                    batteryTempC = if (sample != null && sample.batteryTempTenthsC >= 0) sample.batteryTempTenthsC / 10.0 else null,
+                    thermalStatus = sample?.thermalStatus,
+                    thermalStatusName = sample?.thermalStatus?.let(::thermalStatusLabel),
+                    inThermalPause = inThermalPause,
+                    androidPowerSaveMode = power.androidPowerSaveMode,
+                    manualPowerMode = power.manualPowerMode,
+                    socTempC = socTempC,
+                ),
+            )
+        }
+
         while (!cancelled.get()) {
             val historyBeforeWait = journal.history()
             val clearanceSample = awaitThermalClearance(
@@ -253,6 +290,16 @@ internal class ResearchLaboratory(
                     buildCheckpoint(LabSessionState.COMPLETED, reason, "Complete", null, history, pow, 0),
                 )
                 journal.finish(reason)
+                LabJournal.setActiveSession(root, journal.sessionId, LabSessionState.COMPLETED)
+                publishProgress(
+                    stageLabel = "Complete",
+                    historySnapshot = history,
+                    remainingPlanned = 0,
+                    hypothesis = reason,
+                    sample = lastSample,
+                    power = pow,
+                    completed = true,
+                )
                 runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
                 return "Research complete. Evidence is ready to export."
             }
@@ -261,6 +308,15 @@ internal class ResearchLaboratory(
             if (guardReason != null) {
                 skippedKeys += next.attempt.key
                 journal.appendTelemetry(json("event" to "exploration_guard_skip", "key" to next.attempt.key, "reason" to guardReason))
+                val afterSkipEffective = effectiveHistoryFor(history, interruptedCounts, skippedKeys)
+                publishProgress(
+                    stageLabel = planner.stageLabel(next.attempt),
+                    historySnapshot = history,
+                    remainingPlanned = planner.remainingPlannedCount(afterSkipEffective, skippedKeys),
+                    hypothesis = next.hypothesis,
+                    sample = lastSample,
+                    power = lastPowerSnapshot ?: LabPowerProfile.capture(context),
+                )
                 continue
             }
 
@@ -274,6 +330,7 @@ internal class ResearchLaboratory(
                 val reason = "${spaceDecision.reason ?: "Storage limit reached."} Progress saved; export or free space then tap Resume."
                 val currentSample = sampleThermal(context, root, evidenceLimitBytes).also { lastSample = it }
                 val pow = currentSample.powerProfile ?: LabPowerProfile.capture(context)
+                val rem = planner.remainingPlannedCount(effectiveHistory, skippedKeys)
                 journal.saveCheckpointState(
                     buildCheckpoint(
                         state = LabSessionState.PAUSED_STORAGE,
@@ -282,9 +339,11 @@ internal class ResearchLaboratory(
                         inFlight = null,
                         history = history,
                         power = pow,
-                        remainingPlanned = planner.remainingPlannedCount(effectiveHistory, skippedKeys),
+                        remainingPlanned = rem,
                     ),
                 )
+                LabJournal.setActiveSession(root, journal.sessionId, LabSessionState.PAUSED_STORAGE)
+                publishProgress(planner.stageLabel(next.attempt), history, rem, reason, currentSample, pow)
                 journal.recordStop(reason, currentSample.toJson())
                 runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
                 return reason
@@ -299,28 +358,8 @@ internal class ResearchLaboratory(
             val stageTitle = planner.stageLabel(next.attempt)
             status("$stageTitle · ${next.attempt.label}")
             val sample = lastSample ?: sampleThermal(context, root, evidenceLimitBytes).also { lastSample = it }
-            val completedCount = history.count { it.verdict != LabVerdict.STOPPED && it.verdict != LabVerdict.INTERRUPTED }
             val remainingPlanned = planner.remainingPlannedCount(effectiveHistory, skippedKeys)
-            val socTempC = sample.sysZones["soc_thermal"]?.let(::normalizeSysZoneC)
-            onProgress?.invoke(
-                LabUiProgress(
-                    stageLabel = stageTitle,
-                    attemptNumber = completedCount + 1,
-                    maxAttempts = (completedCount + remainingPlanned).coerceAtLeast(1),
-                    completedAttempts = completedCount,
-                    remainingPlanned = remainingPlanned,
-                    hypothesis = next.hypothesis,
-                    confirmedHypotheses = knowledge.confirmedCount(),
-                    totalHypotheses = knowledge.totalHypotheses(),
-                    batteryTempC = if (sample.batteryTempTenthsC >= 0) sample.batteryTempTenthsC / 10.0 else null,
-                    thermalStatus = sample.thermalStatus,
-                    thermalStatusName = thermalStatusLabel(sample.thermalStatus),
-                    inThermalPause = false,
-                    androidPowerSaveMode = powerSnapshot.androidPowerSaveMode,
-                    manualPowerMode = powerSnapshot.manualPowerMode,
-                    socTempC = socTempC,
-                ),
-            )
+            publishProgress(stageTitle, history, remainingPlanned, next.hypothesis, sample, powerSnapshot)
 
             val attempt = journal.begin(next, apkRevision, powerSnapshot)
             attempt.notice(sample.toJson())
@@ -354,6 +393,7 @@ internal class ResearchLaboratory(
                     journal.saveCheckpointState(
                         buildCheckpoint(LabSessionState.RUNNING, null, stageTitle, null, updatedHistory, postPower, updatedRemaining),
                     )
+                    publishProgress(stageTitle, updatedHistory, updatedRemaining, next.hypothesis, lastSample, postPower)
                     runCatching {
                         LabReportGenerator.generate(journal.directory, journal.inventoryJson(), updatedHistory, knowledge, null)
                     }.onFailure { err ->
@@ -391,6 +431,8 @@ internal class ResearchLaboratory(
                             updatedRemaining,
                         ),
                     )
+                    LabJournal.setActiveSession(root, journal.sessionId, outcome.state)
+                    publishProgress(stageTitle, updatedHistory, updatedRemaining, outcome.reason, lastSample, postPower)
                     runCatching {
                         LabReportGenerator.generate(journal.directory, journal.inventoryJson(), updatedHistory, knowledge, outcome.reason)
                     }
@@ -412,6 +454,8 @@ internal class ResearchLaboratory(
 
         val cancelReason = "Research paused. The saved run can be resumed."
         val hist = journal.history()
+        val cancelPower = lastPowerSnapshot ?: LabPowerProfile.capture(context)
+        val cancelRemaining = planner.remainingPlannedCount(effectiveHistoryFor(hist, interruptedCounts, skippedKeys), skippedKeys)
         journal.saveCheckpointState(
             buildCheckpoint(
                 LabSessionState.PAUSED_USER,
@@ -419,10 +463,12 @@ internal class ResearchLaboratory(
                 "Paused",
                 null,
                 hist,
-                lastPowerSnapshot ?: LabPowerProfile.capture(context),
-                planner.remainingPlannedCount(effectiveHistoryFor(hist, interruptedCounts, skippedKeys), skippedKeys),
+                cancelPower,
+                cancelRemaining,
             ),
         )
+        LabJournal.setActiveSession(root, journal.sessionId, LabSessionState.PAUSED_USER)
+        publishProgress("Paused", hist, cancelRemaining, cancelReason, lastSample, cancelPower)
         journal.recordStop(cancelReason, lastSample?.toJson())
         runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), hist, knowledge, cancelReason) }
         return cancelReason

@@ -672,10 +672,12 @@ internal object LabSyntheticEncoderProbe {
                         val ramp = coded?.optJSONObject("rampPrecision")
                         val effBits = ramp?.optInt("effectiveBitsEstimate")
                         entry.put("spsBitDepthLuma", sps?.bitDepthLuma)
+                        entry.put("decoderOutputBitDepth", ramp?.opt("decoderOutputBitDepth"))
+                        entry.put("decoderTruncatedTo8Bit", ramp?.opt("decoderTruncatedTo8Bit"))
                         entry.put("rampEffectiveBits", effBits)
                         entry.put("mod4ZeroFraction", ramp?.optDouble("mod4ZeroFraction"))
                         entry.put("encodedOk", true)
-                        if ((effBits ?: 0) >= 9) {
+                        if ((effBits ?: 0) >= 9 || tempFile.length() in 1L..512_000L) {
                             entry.put("preservedClip", tempFile.name)
                         } else {
                             runCatching { tempFile.delete() }

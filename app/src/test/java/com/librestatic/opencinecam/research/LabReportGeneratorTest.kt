@@ -44,11 +44,18 @@ class LabReportGeneratorTest {
 
         val kb = LabKnowledgeBase.loadOrCreate(journal.directory)
         kb.ingestInventory(requireNotNull(journal.inventoryJson()))
-        val logCase = LabCase("0", LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false)
-        val attempt = journal.begin(LabDecision(logCase, null, "4K30 test"))
-        attempt.event(LabStage.FILE, json("mime" to "video/hevc", "codedBitDepthFromProfile" to 10, "observedFileFps" to 29.97))
+        val logCase = LabCase("0", LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, variant = "gamma_2_0")
+        val attempt = journal.begin(LabDecision(logCase, null, "4K30 gamma_2_0"))
+        attempt.event(LabStage.FILE, json("mime" to "video/hevc", "codedBitDepthFromProfile" to 10, "observedFileFps" to 29.99))
         attempt.result(LabVerdict.OBSERVED, null)
         kb.ingestAttempt(attempt.directory.name, logCase, LabVerdict.OBSERVED, null, attempt.readEvents())
+
+        val flatCase = LabCase("0", LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, flatToneMap = true)
+        val flatAttempt = journal.begin(LabDecision(flatCase, null, "4K30 FLAT"))
+        flatAttempt.event(LabStage.FILE, json("mime" to "video/hevc", "codedBitDepthFromProfile" to 10, "observedFileFps" to 29.99))
+        flatAttempt.result(LabVerdict.OBSERVED, null)
+        kb.ingestAttempt(flatAttempt.directory.name, flatCase, LabVerdict.OBSERVED, null, flatAttempt.readEvents())
+        assertTrue("gamma_2_0 must outrank FLAT in bestLogRecipeSummary", kb.bestLogRecipeSummary!!.contains("var=gamma_2_0"))
 
         val mdFile = LabReportGenerator.generate(
             journalDir = journal.directory,
@@ -67,7 +74,7 @@ class LabReportGeneratorTest {
         assertTrue(mdText.contains("POWER_MODE_CONFOUNDED"))
 
         val jsonReport = JSONObject(File(journal.directory, "report.json").readText(Charsets.UTF_8))
-        assertEquals(1, jsonReport.getInt("observedAttempts"))
+        assertEquals(2, jsonReport.getInt("observedAttempts"))
         assertEquals("36.2", jsonReport.getJSONObject("telemetry").getString("maxBatteryTempC"))
 
         val zipBytes = ByteArrayOutputStream()

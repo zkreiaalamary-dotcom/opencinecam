@@ -43,6 +43,22 @@ internal class LabJournal private constructor(
             it.optString("fingerprint") == Build.FINGERPRINT
     } == true
 
+    /** True only if this unfinished run recorded actual progress beyond STOPPED-only ghost attempts. */
+    fun hasResumableProgress(): Boolean {
+        if (!resumableOnDevice()) return false
+        val cp = readCheckpointState()
+        if (cp != null && cp.state == LabSessionState.COMPLETED) return false
+        val hist = history()
+        val nonStopped = hist.count { it.verdict != LabVerdict.STOPPED }
+        if (nonStopped > 0) return true
+        return cp != null && cp.schemaVersion >= VERSION && (
+            cp.completedKeys.isNotEmpty() ||
+                cp.failedKeys.isNotEmpty() ||
+                cp.interruptedCounts.isNotEmpty() ||
+                cp.inFlightAttempt != null
+            )
+    }
+
     fun headerJson(): JSONObject? = readJson(header)
 
     fun recordApkRevisionTransition(newRevision: String) {
@@ -261,42 +277,98 @@ internal class LabJournal private constructor(
             return latest?.let { LabJournal(it) }
         }
 
-        fun setActiveSession(root: File, sessionId: String) {
+        fun setActiveSession(root: File, sessionId: String, state: LabSessionState = LabSessionState.RUNNING) {
             if (!root.exists()) root.mkdirs()
             writeJson(
                 File(root, ACTIVE_SESSION_FILE),
-                json("sessionId" to sessionId, "updatedEpochMs" to System.currentTimeMillis()),
+                json(
+                    "sessionId" to sessionId,
+                    "state" to state.name,
+                    "updatedEpochMs" to System.currentTimeMillis(),
+                ),
             )
         }
 
-        fun readActiveSessionId(root: File): String? =
-            readJson(File(root, ACTIVE_SESSION_FILE))?.optString("sessionId")?.takeIf { it.isNotBlank() }
+        fun readActiveSessionPointer(root: File): Pair<String, LabSessionState?>? {
+            val obj = readJson(File(root, ACTIVE_SESSION_FILE)) ?: return null
+            val id = obj.optString("sessionId").takeIf { it.isNotBlank() } ?: return null
+            val state = obj.optString("state").takeIf { it.isNotBlank() }?.let { raw ->
+                runCatching { LabSessionState.valueOf(raw) }.getOrNull()
+            }
+            return id to state
+        }
+
+        fun readActiveSessionId(root: File): String? = readActiveSessionPointer(root)?.first
+
+        private fun isSessionCompleted(journal: LabJournal): Boolean =
+            journal.finished || journal.readCheckpointState()?.state == LabSessionState.COMPLETED
 
         /**
-         * Returns the active resumable session on this device, preferring the active pointer or the
-         * newest unfinished session with recorded attempts over an empty 0-attempt aborted run.
+         * Returns the active resumable session on this device. Once the active/newest session completes,
+         * never falls back to resurrecting older abandoned/stopped legacy runs. Skips 0-attempt aborts
+         * and STOPPED-only ghost runs without real progress.
          */
         fun latestResumable(root: File): LabJournal? {
-            val pointerId = readActiveSessionId(root)
-            if (pointerId != null) {
+            val pointer = readActiveSessionPointer(root)
+            if (pointer != null) {
+                val (pointerId, pointerState) = pointer
                 val pointedDir = File(root, pointerId)
                 if (File(pointedDir, "run.json").isFile) {
                     val pointed = LabJournal(pointedDir)
-                    if (pointed.resumableOnDevice() && pointed.attempts().isNotEmpty()) {
+                    if (isSessionCompleted(pointed) || pointerState == LabSessionState.COMPLETED) {
+                        return null
+                    }
+                    if (pointed.hasResumableProgress()) {
                         return pointed
                     }
                 }
             }
-            val resumables = allRunDirectories(root).map { LabJournal(it) }.filter { it.resumableOnDevice() }
-            return resumables.firstOrNull { it.attempts().isNotEmpty() } ?: resumables.firstOrNull()
+            for (dir in allRunDirectories(root)) {
+                val journal = LabJournal(dir)
+                if (isSessionCompleted(journal)) {
+                    // A newer session completed cleanly; older unfinished dirs are historical archives.
+                    return null
+                }
+                if (journal.hasResumableProgress()) {
+                    return journal
+                }
+            }
+            return null
         }
 
         fun inspectResumableSummary(root: File): LabSessionSummary {
             val allRuns = allRunDirectories(root)
-            val resumable = latestResumable(root) ?: return LabSessionSummary(
-                hasResumableSession = false,
-                pastSessionCount = allRuns.size,
-            )
+            val resumable = latestResumable(root)
+            if (resumable == null) {
+                val latestCompleted = readActiveSessionId(root)?.let { id ->
+                    val d = File(root, id)
+                    if (File(d, "run.json").isFile) LabJournal(d).takeIf(::isSessionCompleted) else null
+                } ?: allRuns.asSequence().map(::LabJournal).firstOrNull(::isSessionCompleted)
+                if (latestCompleted != null) {
+                    val hist = latestCompleted.history()
+                    val cp = latestCompleted.readCheckpointState()
+                    val completed = hist.count { it.verdict != LabVerdict.STOPPED && it.verdict != LabVerdict.INTERRUPTED }
+                    val observed = hist.count { it.verdict == LabVerdict.OBSERVED }
+                    val failed = hist.count { it.verdict == LabVerdict.FAILED || it.verdict == LabVerdict.MISMATCH }
+                    val skipped = cp?.skippedKeys?.size ?: 0
+                    val compReason = readJson(File(latestCompleted.directory, "summary.json"))?.optString("reason")
+                        ?.takeIf { it.isNotBlank() } ?: cp?.stopReason
+                    return LabSessionSummary(
+                        hasResumableSession = false,
+                        pastSessionCount = allRuns.size,
+                        lastCompletedSessionId = latestCompleted.sessionId,
+                        lastCompletedCount = completed,
+                        lastObservedCount = observed,
+                        lastFailedCount = failed,
+                        lastSkippedCount = skipped,
+                        lastCompletionReason = compReason,
+                    )
+                }
+                return LabSessionSummary(
+                    hasResumableSession = false,
+                    pastSessionCount = allRuns.size,
+                )
+            }
             val cp = resumable.readCheckpointState()
             val hist = resumable.history()
             val completed = hist.count { it.verdict != LabVerdict.STOPPED && it.verdict != LabVerdict.INTERRUPTED }
@@ -311,6 +383,7 @@ internal class LabJournal private constructor(
                 completedCount = completed,
                 failedCount = failed,
                 interruptedCount = interrupted,
+                skippedCount = cp?.skippedKeys?.size ?: 0,
                 currentStage = cp?.currentStage,
                 lastStopReason = cp?.stopReason ?: resumable.readPauseReason(),
                 apkRevision = cp?.latestApkRevision?.takeIf { it.isNotBlank() }

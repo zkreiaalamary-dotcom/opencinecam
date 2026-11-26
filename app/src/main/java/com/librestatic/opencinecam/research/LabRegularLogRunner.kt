@@ -326,16 +326,30 @@ internal class LabRegularLogRunner(
                     },
                 ))
                 attempt.notice(snap)
-                val camStats = snap.optJSONObject("camera")
-                val camFps = camStats?.optDouble("fps") ?: 0.0
-                val camDrops = camStats?.optInt("longIntervals") ?: 0
+                var camFps = 0.0
+                var camDrops = 0
+                val camArr = snap.optJSONArray("cameraFrameNumberAndSensorNs")
+                if (camArr != null && camArr.length() >= 2) {
+                    val firstNs = camArr.optJSONArray(0)?.optLong(1, -1L) ?: -1L
+                    val lastNs = camArr.optJSONArray(camArr.length() - 1)?.optLong(1, -1L) ?: -1L
+                    if (lastNs > firstNs) {
+                        camFps = (camArr.length() - 1) * 1_000_000_000.0 / (lastNs - firstNs).toDouble()
+                    }
+                    val gapThresholdNs = 1_500_000_000L / case.fps.coerceAtLeast(1)
+                    var prevNs = firstNs
+                    for (i in 1 until camArr.length()) {
+                        val curNs = camArr.optJSONArray(i)?.optLong(1, -1L) ?: -1L
+                        if (curNs > prevNs && (curNs - prevNs) > gapThresholdNs) camDrops++
+                        if (curNs > 0L) prevNs = curNs
+                    }
+                }
                 val glGaps = diag?.totalGaps ?: 0L
                 val verdict = if (camFps >= case.fps * 0.95 && camDrops == 0 && glGaps == 0L) {
                     LabVerdict.OBSERVED
                 } else {
                     LabVerdict.MISMATCH
                 }
-                return verdict to "Regular-session GPU preview-only (encoder idle): camFps=${"%.2f".format(java.util.Locale.ROOT, camFps)}, camDrops=$camDrops, glFrames=${diag?.totalFrames}, glGaps=$glGaps, glMissing=${diag?.totalMissingFrames}."
+                return verdict to "Regular-session GPU preview-only (encoder idle): camFrames=${camArr?.length() ?: 0}, camFps=${"%.2f".format(java.util.Locale.ROOT, camFps)}, camDrops=$camDrops, glFrames=${diag?.totalFrames}, glGaps=$glGaps, glMissing=${diag?.totalMissingFrames}."
             }
 
             val geometry = RecordingGeometryCalculator.calculate(

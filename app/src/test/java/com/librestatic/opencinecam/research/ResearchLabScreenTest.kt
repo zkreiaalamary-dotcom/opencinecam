@@ -6,6 +6,7 @@ package com.librestatic.opencinecam.research
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.librestatic.opencinecam.ui.theme.AppTheme
@@ -171,5 +172,49 @@ class ResearchLabScreenTest {
         composeRule.onNodeWithTag("lab-new-dialog").assertIsDisplayed()
         composeRule.onNodeWithTag("lab-new-confirm").performClick()
         assertTrue(startedNew)
+    }
+
+    @Test
+    fun completedSessionShowsZeroRemainingAndNoFalsePausedCheckpoint() {
+        composeRule.setContent {
+            OpenCineCamTheme(AppTheme.CINE) {
+                ResearchLabContent(
+                    status = "Research complete. Evidence is ready to export.",
+                    running = false,
+                    exporting = false,
+                    progress = LabUiProgress(
+                        stageLabel = "Complete",
+                        attemptNumber = 47,
+                        maxAttempts = 47,
+                        completedAttempts = 47,
+                        remainingPlanned = 0,
+                        skippedAttempts = 0,
+                        completed = true,
+                        hypothesis = "All autonomous research objectives completed.",
+                        confirmedHypotheses = 6,
+                        totalHypotheses = 12,
+                    ),
+                    sessionSummary = LabSessionSummary(
+                        hasResumableSession = false,
+                        pastSessionCount = 17,
+                        lastCompletedSessionId = "1795725149085-082c0332",
+                        lastCompletedCount = 47,
+                        lastObservedCount = 26,
+                        lastFailedCount = 21,
+                        lastSkippedCount = 0,
+                        lastCompletionReason = "All autonomous research objectives completed.",
+                    ),
+                    onBack = {},
+                    onStart = {},
+                    onNew = {},
+                    onStop = {},
+                    onExport = {},
+                )
+            }
+        }
+        composeRule.onNodeWithText("Complete (47 done · 0 remaining)").assertIsDisplayed()
+        composeRule.onNodeWithText("Last session completed: 47 completed (26 observed, 21 failed/mismatch)").assertIsDisplayed()
+        composeRule.onNodeWithText("Total stored runs: 17").assertIsDisplayed()
+        composeRule.onNodeWithText("Saved checkpoint", substring = true).assertDoesNotExist()
     }
 }

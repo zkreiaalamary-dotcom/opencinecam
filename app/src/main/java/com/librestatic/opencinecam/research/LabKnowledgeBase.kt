@@ -139,6 +139,7 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         private set
     var bestLogRecipeSummary: String? = null
         private set
+    private var bestLogRecipeScore: Int = Int.MIN_VALUE
     var bestDirect4k60Summary: String? = null
         private set
     var toneMapFlatVerdict: String? = null
@@ -437,7 +438,18 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
             if (bestSourcePrecision == "UNVERIFIED" || bestSourcePrecision.startsWith("SYNTHETIC_")) {
                 bestSourcePrecision = "POST_ISP_8BIT_SDR_DERIVED (regular Session SDR_BT709_ISP)"
             }
-            bestLogRecipeSummary = "${case.path.name} (${case.width}x${case.height} @ ${"%.2f".format(java.util.Locale.ROOT, observedFps ?: case.fps.toDouble())} fps, flat=${case.flatToneMap}, var=${case.variant.ifBlank { "default" }}, attempt=$attemptId)"
+            val score = case.fps * 100 + when {
+                case.variant == "gamma_2_0" -> 50
+                case.variant == "gamma_2_2" -> 45
+                case.variant.isBlank() && !case.flatToneMap -> 30
+                case.variant == "gamma_1_8" -> 15
+                case.flatToneMap -> -20
+                else -> 10
+            }
+            if (score >= bestLogRecipeScore) {
+                bestLogRecipeScore = score
+                bestLogRecipeSummary = "${case.path.name} (${case.width}x${case.height} @ ${"%.2f".format(java.util.Locale.ROOT, observedFps ?: case.fps.toDouble())} fps, flat=${case.flatToneMap}, var=${case.variant.ifBlank { "default" }}, attempt=$attemptId)"
+            }
         }
     }
 

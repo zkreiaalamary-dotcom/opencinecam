@@ -136,6 +136,75 @@ class LabSessionBudgetTest {
     }
 
     @Test
+    fun completedActiveSessionNeverResurrectsStaleOrStoppedOnlyGhostRuns() {
+        val root = folder.newFolder()
+        // 1. Old legacy STOPPED-only ghost run (like c8959e8a)
+        val ghost = LabJournal.create(root, "rev-1")
+        val gCase = LabCase("0", LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false)
+        val gAttempt = ghost.begin(LabDecision(gCase, null, "ghost"))
+        gAttempt.result(LabVerdict.STOPPED, "User stopped before any result")
+        assertFalse(ghost.hasResumableProgress())
+
+        // Without any newer completed session, STOPPED-only ghost run is STILL not resumable
+        assertNull(LabJournal.latestResumable(root))
+        assertFalse(LabJournal.inspectResumableSummary(root).hasResumableSession)
+
+        // 2. Older interrupted run with real progress IS resumable before completion
+        val olderPaused = LabJournal.create(root, "rev-1")
+        val pAttempt = olderPaused.begin(LabDecision(gCase, null, "Stage A"))
+        pAttempt.result(LabVerdict.OBSERVED, null)
+        assertTrue(olderPaused.hasResumableProgress())
+        assertEquals(olderPaused.sessionId, LabJournal.latestResumable(root)?.sessionId)
+
+        // 3. Newest session completes cleanly
+        val completedRun = LabJournal.create(root, "rev-2")
+        val c1 = completedRun.begin(LabDecision(gCase, null, "Stage A"))
+        c1.result(LabVerdict.OBSERVED, null)
+        val c2 = completedRun.begin(LabDecision(LabCase("0", LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false), null, "Stage C"))
+        c2.result(LabVerdict.MISMATCH, "48 fps")
+        completedRun.saveCheckpointState(
+            LabCheckpointState(
+                sessionId = completedRun.sessionId,
+                createdEpochMs = 10_000L,
+                updatedEpochMs = 20_000L,
+                initialApkRevision = "rev-2",
+                latestApkRevision = "rev-2",
+                revisionHistory = listOf("rev-2"),
+                deviceFingerprint = android.os.Build.FINGERPRINT,
+                selectedCameraId = "0",
+                evidenceLimitBytes = 20_000_000_000L,
+                manualPowerMode = ManualPowerMode.PERFORMANCE,
+                lastAndroidPowerSaveMode = false,
+                state = LabSessionState.COMPLETED,
+                stopReason = "All autonomous research objectives completed.",
+                currentStage = "Complete",
+                inFlightAttempt = null,
+                completedKeys = listOf(gCase.key),
+                failedKeys = listOf("0/GPU_HEVC_4K60/3840x2160/60/false/false/false/false/0/"),
+                skippedKeys = listOf("skipped-1"),
+                interruptedCounts = emptyMap(),
+                scheduledQueuePreview = emptyList(),
+                explorationDecisions = emptyList(),
+                hypothesisStatuses = emptyMap(),
+                powerModeHistory = emptyList(),
+            ),
+        )
+        completedRun.finish("All autonomous research objectives completed.")
+        LabJournal.setActiveSession(root, completedRun.sessionId, LabSessionState.COMPLETED)
+
+        // Completed active session MUST NOT fall back to older paused/ghost runs!
+        assertNull(LabJournal.latestResumable(root))
+        val summary = LabJournal.inspectResumableSummary(root)
+        assertFalse(summary.hasResumableSession)
+        assertEquals(completedRun.sessionId, summary.lastCompletedSessionId)
+        assertEquals(2, summary.lastCompletedCount)
+        assertEquals(1, summary.lastObservedCount)
+        assertEquals(1, summary.lastFailedCount)
+        assertEquals(1, summary.lastSkippedCount)
+        assertEquals(3, summary.pastSessionCount)
+    }
+
+    @Test
     fun manualPowerModePersistsInPreferences() {
         val ctx = org.robolectric.RuntimeEnvironment.getApplication()
         assertEquals(ManualPowerMode.UNSPECIFIED, LabPowerProfile.loadManualPowerMode(ctx))

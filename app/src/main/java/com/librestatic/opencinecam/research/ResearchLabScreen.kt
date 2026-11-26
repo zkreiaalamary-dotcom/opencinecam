@@ -60,6 +60,8 @@ internal data class LabUiProgress(
     val maxAttempts: Int = 0,
     val completedAttempts: Int = 0,
     val remainingPlanned: Int = 0,
+    val skippedAttempts: Int = 0,
+    val completed: Boolean = false,
     val hypothesis: String? = null,
     val confirmedHypotheses: Int = 0,
     val totalHypotheses: Int = 12,
@@ -169,8 +171,9 @@ internal fun ResearchLabContent(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val countLabel = if (progress.remainingPlanned > 0 || progress.completedAttempts > 0) {
-                        "${progress.completedAttempts} done · ${progress.remainingPlanned} remaining"
+                    val countLabel = if (progress.completed || progress.remainingPlanned > 0 || progress.completedAttempts > 0) {
+                        val skipSuffix = if (progress.skippedAttempts > 0) " · ${progress.skippedAttempts} skipped" else ""
+                        "${progress.completedAttempts} done · ${progress.remainingPlanned} remaining$skipSuffix"
                     } else if (progress.maxAttempts > 0) {
                         "${progress.attemptNumber}/${progress.maxAttempts}"
                     } else {
@@ -268,10 +271,11 @@ internal fun ResearchLabContent(
             ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (sessionSummary.hasResumableSession) {
+                        val skipPart = if (sessionSummary.skippedCount > 0) ", ${sessionSummary.skippedCount} skipped" else ""
                         Text(
                             "Saved checkpoint (${sessionSummary.state?.name ?: "PAUSED"}): " +
                                 "${sessionSummary.completedCount} completed, ${sessionSummary.failedCount} failed/mismatch, " +
-                                "${sessionSummary.interruptedCount} interrupted",
+                                "${sessionSummary.interruptedCount} interrupted$skipPart",
                             style = MaterialTheme.typography.titleSmall,
                         )
                         val detail = buildString {
@@ -282,6 +286,18 @@ internal fun ResearchLabContent(
                         sessionSummary.lastStopReason?.let { reason ->
                             Text("Last pause: $reason", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                    } else if (sessionSummary.lastCompletedSessionId != null) {
+                        val skipPart = if (sessionSummary.lastSkippedCount > 0) ", ${sessionSummary.lastSkippedCount} skipped" else ""
+                        Text(
+                            "Last session completed: ${sessionSummary.lastCompletedCount} completed " +
+                                "(${sessionSummary.lastObservedCount} observed, ${sessionSummary.lastFailedCount} failed/mismatch$skipPart)",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            "Total stored runs: ${sessionSummary.pastSessionCount}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     } else {
                         Text(
                             "No paused run pending (${sessionSummary.pastSessionCount} archived run(s) preserved).",
@@ -485,6 +501,7 @@ private class ResearchLabControls(private val context: android.content.Context, 
         )
         this.run = run
         running = true
+        progress = null
         status = context.getString(R.string.research_lab_preparing)
         worker.execute {
             val message = runCatching { run.run(resume) }.getOrElse { it.message ?: it.javaClass.simpleName }
