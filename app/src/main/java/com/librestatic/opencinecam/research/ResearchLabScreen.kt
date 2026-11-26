@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -20,9 +21,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import java.util.Locale
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +48,17 @@ import java.util.concurrent.Executors
 import android.os.Handler
 import android.os.Looper
 import android.net.Uri
+
+internal data class LabUiProgress(
+    val stageLabel: String = "",
+    val attemptNumber: Int = 0,
+    val maxAttempts: Int = 24,
+    val hypothesis: String? = null,
+    val confirmedHypotheses: Int = 0,
+    val totalHypotheses: Int = 10,
+    val batteryTempC: Double? = null,
+    val thermalStatus: Int? = null,
+)
 
 @Composable
 internal fun ResearchLabScreen(cameraId: String?, onBack: () -> Unit) {
@@ -76,6 +90,7 @@ internal fun ResearchLabScreen(cameraId: String?, onBack: () -> Unit) {
         status = controls.status,
         running = controls.running,
         exporting = controls.exporting,
+        progress = controls.progress,
         onBack = leave,
         onStart = { controls.start(resume = true) },
         onNew = { controls.start(resume = false) },
@@ -94,6 +109,7 @@ internal fun ResearchLabContent(
     onNew: () -> Unit,
     onStop: () -> Unit,
     onExport: () -> Unit,
+    progress: LabUiProgress? = null,
 ) {
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
@@ -107,6 +123,44 @@ internal fun ResearchLabContent(
             modifier = Modifier.testTag("lab-status").semantics { liveRegion = LiveRegionMode.Polite },
             color = MaterialTheme.colorScheme.onSurface,
         )
+        if (progress != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "${progress.stageLabel} (${progress.attemptNumber}/${progress.maxAttempts})",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.testTag("lab-stage"),
+                    )
+                    val hypText = buildString {
+                        if (!progress.hypothesis.isNullOrBlank()) {
+                            append(progress.hypothesis)
+                            append(" · ")
+                        }
+                        append("Hypotheses confirmed: ${progress.confirmedHypotheses}/${progress.totalHypotheses}")
+                    }
+                    Text(
+                        hypText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("lab-hypothesis"),
+                    )
+                    if (progress.batteryTempC != null || progress.thermalStatus != null) {
+                        val tempStr = progress.batteryTempC?.let { "%.1f °C".format(Locale.ROOT, it) } ?: "n/a"
+                        val thermStr = progress.thermalStatus?.toString() ?: "n/a"
+                        Text(
+                            "Battery: $tempStr · Thermal status: $thermStr",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("lab-telemetry"),
+                        )
+                    }
+                }
+            }
+        }
         if (running) {
             Button(onClick = onStop, modifier = Modifier.testTag("lab-stop")) { Text(stringResource(R.string.research_lab_stop)) }
         } else {
@@ -127,6 +181,8 @@ private class ResearchLabControls(private val context: android.content.Context, 
     private var run: ResearchLaboratory? = null
     var status by mutableStateOf<String?>(null)
         private set
+    var progress by mutableStateOf<LabUiProgress?>(null)
+        private set
     var running by mutableStateOf(false)
         private set
     var exporting by mutableStateOf(false)
@@ -134,7 +190,12 @@ private class ResearchLabControls(private val context: android.content.Context, 
 
     fun start(resume: Boolean) {
         if (running || exporting) return
-        val run = ResearchLaboratory(context, cameraId) { message -> main.post { status = message } }
+        val run = ResearchLaboratory(
+            context = context,
+            cameraId = cameraId,
+            status = { message -> main.post { status = message } },
+            onProgress = { snapshot -> main.post { progress = snapshot } },
+        )
         this.run = run
         running = true
         status = context.getString(R.string.research_lab_preparing)

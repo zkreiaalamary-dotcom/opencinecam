@@ -39,6 +39,12 @@ internal class LabJournal private constructor(val directory: File, revision: Str
 
     fun inventory(report: JSONObject) = writeJson(File(directory, "inventory.json"), report)
 
+    fun inventoryJson(): JSONObject? = readJson(File(directory, "inventory.json"))
+
+    fun attemptDirectory(id: String): File = File(directory, id)
+
+    fun telemetryFile(): File = telemetryFile
+
     fun history(): List<LabResult> = attempts().mapNotNull { folder ->
         val start = readJson(File(folder, "000-requested.json")) ?: return@mapNotNull null
         val saved = readJson(File(folder, "result.json"))
@@ -109,11 +115,16 @@ internal class LabJournal private constructor(val directory: File, revision: Str
 
     private fun attempts(): List<File> = directory.listFiles().orEmpty().filter(File::isDirectory).sortedBy(File::getName)
 
-    class Attempt(private val directory: File) {
+    class Attempt(val directory: File) {
         private var sequence = 0
         var stage = LabStage.REQUESTED
             private set
         val clip = File(directory, "clip.mp4")
+
+        fun readEvents(): List<JSONObject> = directory.listFiles().orEmpty()
+            .filter { it.isFile && it.extension == "json" && it.name.firstOrNull()?.isDigit() == true }
+            .sortedBy { it.name }
+            .mapNotNull(::readJson)
 
         fun event(stage: LabStage, data: JSONObject) {
             val name = "%03d-%s.json".format(java.util.Locale.ROOT, sequence++, stage.name.lowercase(java.util.Locale.ROOT))
