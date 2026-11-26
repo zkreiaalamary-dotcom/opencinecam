@@ -192,6 +192,19 @@ internal class LabAutonomousPlanner(
             return LabDecision(it, null, "Stage E (H-09): probe com.huawei.capture.metadata.cuvaStateVideoMode ByteArray states 0/1/2 & HDR buffers.")
         }
 
+        // Stage G: Kirin 9020 breakthrough probes (4K60 input isolation, CUVA HDR MP4s, EGL priority, hidden RAW, vendor BB10).
+        for ((breakthroughPath, hyp) in listOf(
+            LabPath.BREAKTHROUGH_4K60_INPUT to "Stage G: isolate 4K60 Camera2 CAM_CB vs SurfaceTexture vs ImageReader vs sceneMode=28/31.",
+            LabPath.BREAKTHROUGH_CUVA_VIDEO to "Stage G: record CUVA HDR Vivid Direct 4K30/4K60 & GPU 4K30 MP4 clips under locked AE.",
+            LabPath.BREAKTHROUGH_SYNTH_4K60_PRIORITY to "Stage G: benchmark synthetic 4K60 Main8/Main10 with EGL_IMG_context_priority=HIGH & KEY_PRIORITY=0.",
+            LabPath.BREAKTHROUGH_HIDDEN_RAW to "Stage G: test RAW_SENSOR (32) / RAW10 / RAW_PRIVATE admission on cameras 0 & 2.",
+            LabPath.BREAKTHROUGH_BB10_CLIPS to "Stage G: encode 0x7F000011/0x7F00000F/Flexible 1080p Main10 ByteBuffer clips.",
+        )) {
+            candidates.firstOrNull { it.path == breakthroughPath && it.key !in seen }?.let {
+                return LabDecision(it, null, hyp)
+            }
+        }
+
         // Stage F: Tiered historical audit — run codec level pair, HFR, RAW, primary AVC/HEVC controls without redundant HEVC missing-level spam.
         val redundantPathsToPrune = buildSet<String> {
             candidates.forEach { candidate ->
@@ -248,6 +261,9 @@ internal class LabAutonomousPlanner(
             "Stage D · Direct 4K60 Sustained"
         LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.ISP_CUVA_HDR_PROBE, LabPath.SOURCE_FORMAT_PROBE ->
             "Stage E · ISP & Source Probe"
+        LabPath.BREAKTHROUGH_4K60_INPUT, LabPath.BREAKTHROUGH_CUVA_VIDEO, LabPath.BREAKTHROUGH_SYNTH_4K60_PRIORITY,
+        LabPath.BREAKTHROUGH_HIDDEN_RAW, LabPath.BREAKTHROUGH_BB10_CLIPS ->
+            "Stage G · Breakthrough Probes"
         LabPath.CODEC_LEVEL_PAIR -> "Stage F · Codec Level Control"
         else -> if (case.hfr) "Stage F · HFR Control" else "Stage F · Baseline"
     }

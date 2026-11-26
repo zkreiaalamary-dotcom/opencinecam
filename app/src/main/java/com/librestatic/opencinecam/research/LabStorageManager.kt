@@ -243,6 +243,8 @@ internal object LabStorageManager {
                 if (case.fps >= 60) 60_000_000L else 40_000_000L
             LabPath.CODEC_SYNTHETIC_MATRIX -> 45_000_000L * 4L / durationSec.coerceAtLeast(1)
             LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.ISP_CUVA_HDR_PROBE, LabPath.SOURCE_FORMAT_PROBE -> 24_000_000L
+            LabPath.BREAKTHROUGH_4K60_INPUT, LabPath.BREAKTHROUGH_CUVA_VIDEO, LabPath.BREAKTHROUGH_SYNTH_4K60_PRIORITY,
+            LabPath.BREAKTHROUGH_HIDDEN_RAW, LabPath.BREAKTHROUGH_BB10_CLIPS -> 40_000_000L
             LabPath.CODEC_LEVEL_PAIR -> 8_000_000L
         }
         val estimatedMedia = (rawBitrateBps / 8L) * durationSec

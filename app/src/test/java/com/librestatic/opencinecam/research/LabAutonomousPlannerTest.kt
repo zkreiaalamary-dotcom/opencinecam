@@ -146,4 +146,32 @@ class LabAutonomousPlannerTest {
         assertEquals(log60, planner.next(history)?.attempt)
         assertEquals(1, planner.remainingPlannedCount(history))
     }
+
+    @Test
+    fun schedulesStageGBreakthroughProbesBetweenStageEAndStageF() {
+        val kb = LabKnowledgeBase.loadOrCreate(folder.newFolder())
+        val synth = LabCase("0", LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false)
+        val cuva = LabCase("0", LabPath.ISP_CUVA_HDR_PROBE, 3840, 2160, 30, listed = false)
+        val p1 = LabCase("0", LabPath.BREAKTHROUGH_4K60_INPUT, 3840, 2160, 60, listed = false)
+        val p2 = LabCase("0", LabPath.BREAKTHROUGH_CUVA_VIDEO, 3840, 2160, 30, listed = false)
+        val p3 = LabCase("0", LabPath.BREAKTHROUGH_SYNTH_4K60_PRIORITY, 3840, 2160, 60, listed = false)
+        val p4 = LabCase("0", LabPath.BREAKTHROUGH_HIDDEN_RAW, 4096, 3072, 30, listed = false)
+        val p5 = LabCase("0", LabPath.BREAKTHROUGH_BB10_CLIPS, 1920, 1080, 30, listed = false)
+        val lvlPair = LabCase("0", LabPath.CODEC_LEVEL_PAIR, 3840, 2160, 30, listed = false)
+
+        val candidates = listOf(synth, cuva, lvlPair, p1, p2, p3, p4, p5)
+        val planner = LabAutonomousPlanner(candidates, kb)
+        val history = mutableListOf(
+            LabResult(synth, LabVerdict.OBSERVED, LabStage.FILE, "a1"),
+            LabResult(cuva, LabVerdict.OBSERVED, LabStage.FILE, "a2"),
+        )
+
+        for (expected in listOf(p1, p2, p3, p4, p5)) {
+            val step = planner.next(history)
+            assertEquals(expected, step?.attempt)
+            assertEquals("Stage G · Breakthrough Probes", planner.stageLabel(expected))
+            history += LabResult(expected, LabVerdict.OBSERVED, LabStage.FILE, "id-${expected.path.name}")
+        }
+        assertEquals(lvlPair, planner.next(history)?.attempt)
+    }
 }

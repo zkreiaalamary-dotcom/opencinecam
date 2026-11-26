@@ -544,7 +544,32 @@ internal class ResearchLaboratory(
             }
             LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.SOURCE_FORMAT_PROBE, LabPath.ISP_CUVA_HDR_PROBE ->
                 sourceProbe.run(case, attempt)
+            LabPath.BREAKTHROUGH_4K60_INPUT, LabPath.BREAKTHROUGH_CUVA_VIDEO, LabPath.BREAKTHROUGH_SYNTH_4K60_PRIORITY,
+            LabPath.BREAKTHROUGH_HIDDEN_RAW, LabPath.BREAKTHROUGH_BB10_CLIPS ->
+                runBreakthroughProbe(case, attempt)
             else -> video.run(case, attempt)
+        }
+    }
+
+    private fun runBreakthroughProbe(case: LabCase, attempt: LabJournal.Attempt): Pair<LabVerdict, String?> {
+        val summary = when (case.path) {
+            LabPath.BREAKTHROUGH_4K60_INPUT -> LabBreakthroughProbes.runProbe1_4k60CameraInputIsolation(context, attempt.directory, ::checkBudget)
+            LabPath.BREAKTHROUGH_CUVA_VIDEO -> LabBreakthroughProbes.runProbe2_CuvaHdrDirectAndGpuRecording(context, attempt.directory, ::checkBudget)
+            LabPath.BREAKTHROUGH_SYNTH_4K60_PRIORITY -> LabBreakthroughProbes.runProbe3_Synthetic4k60ThroughputAndPriority(context, attempt.directory, ::checkBudget)
+            LabPath.BREAKTHROUGH_HIDDEN_RAW -> LabBreakthroughProbes.runProbe4_HiddenRawSensorAdmission(context, attempt.directory, ::checkBudget)
+            LabPath.BREAKTHROUGH_BB10_CLIPS -> LabBreakthroughProbes.runProbe5_VendorByteBuffer10BitClips(context, attempt.directory, ::checkBudget)
+            else -> error("Unsupported breakthrough probe: ${case.path}")
+        }
+        java.io.File(attempt.directory, "${case.path.name.lowercase(java.util.Locale.ROOT)}.json")
+            .writeText(summary.toString(2), Charsets.UTF_8)
+        attempt.event(LabStage.FILE, summary)
+        val count = summary.optJSONArray("arms")?.length()
+            ?: summary.optJSONArray("results")?.length()
+            ?: 0
+        return if (count > 0) {
+            LabVerdict.OBSERVED to "${case.path.name} completed ($count entries)"
+        } else {
+            LabVerdict.FAILED to "${case.path.name} produced no entries"
         }
     }
 

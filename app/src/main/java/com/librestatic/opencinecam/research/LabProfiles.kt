@@ -97,6 +97,11 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
                 add(direct.copy(longer = true))
             }
             add(LabCase(id, LabPath.CODEC_LEVEL_PAIR, 3840, 2160, 30, listed = false))
+            add(LabCase(id, LabPath.BREAKTHROUGH_4K60_INPUT, 3840, 2160, 60, listed = false))
+            add(LabCase(id, LabPath.BREAKTHROUGH_CUVA_VIDEO, 3840, 2160, 30, listed = false))
+            add(LabCase(id, LabPath.BREAKTHROUGH_SYNTH_4K60_PRIORITY, 3840, 2160, 60, listed = false))
+            add(LabCase(id, LabPath.BREAKTHROUGH_HIDDEN_RAW, 4096, 3072, 30, listed = false))
+            add(LabCase(id, LabPath.BREAKTHROUGH_BB10_CLIPS, 1920, 1080, 30, listed = false))
         }
         return probes + all + all.flatMap {
             if (it.path == LabPath.RAW_CAMERA) listOf(it.copy(path = LabPath.RAW_NATIVE))
