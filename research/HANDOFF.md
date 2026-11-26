@@ -1,24 +1,21 @@
 # Handoff · Huawei Pura 80 Pro (`research/autonomous-log-lab`)
 
-**Current branch:** `research/autonomous-log-lab` (branched from `research/pura80-capture-probes` @ `85574fa3ddfe80b768634ca48ac4c19bb3bb9f70`).
+**Active branch:** `research/autonomous-log-lab` (branched from `research/pura80-capture-probes` @ `85574fa3`; earlier baseline `research/self-exploring-lab` @ `adc19ce1`).  
 **Target device:** Huawei Pura 80 Pro — LMR-LX9 — Kirin 9020 — EMUI 15 — Android API 31.
 
-## Verified baseline (including `OpenCineCam-research (1).zip`)
+> **Authoritative deep documentation:** See [docs/research/agent-handoff.md](../docs/research/agent-handoff.md), [deep-analysis.md](../docs/research/deep-analysis.md), [evidence-index.md](../docs/research/evidence-index.md), [hypotheses.md](../docs/research/hypotheses.md), [engineering-roadmap.md](../docs/research/engineering-roadmap.md), and [next-experiments.md](../docs/research/next-experiments.md).
 
-| Area | Verified fact | Evidence |
-|---|---|---|
-| Direct 4K60 HEVC | `DIRECT_HEVC` (`59.893 fps`, `43.30 Mbps`) and `DIRECT_HEVC_PREVIEW` (`59.920 fps`, `214` drained 720p `PRIVATE` frames, `31.54 Mbps`) both passed 4 s file/geometry/content-diff checks on `d0ffb123`. Run 1 reached `59.291 fps` (`MISMATCH`). | `E-OCC2-R1-001`, `E-OCC2-R2-001`, `E-OCC2-R2-002`, `E-HOST-GEOM-02` |
-| HEVC `KEY_LEVEL` | `OMX.hisi.video.encoder.hevc` Main 4K30 rejected `configure` (`0x80001001`) with `level=null` and started cleanly with `HEVCMainTierLevel51` (`65536`, `framesSubmitted=0`). | `E-OCC2-R2-003` |
-| GPU HEVC & 4K60 | Production GPU HEVC omitted `KEY_LEVEL` and fell back to AVC (`4K30`, `1080p30`). Unlisted GPU `4K60` fell back to `1920x1080@60`. | `E-OCC2-R2-004`, `008`, `009`, `012` |
-| HFR 1080p120 LOG | Reached `codec_create(OMX.hisi.video.encoder.hevc)` and failed `configure` (`0x80001001`, `profile=2`, no `KEY_LEVEL`, `80 Mbps`). | `E-OCC2-R2-005` |
-| Thermal pause gap | Run 1 ended after 1 attempt without `summary.json`; only `001-requested.json` had `thermalStatus=1`, `34.0 °C`. Phase 1 adds `telemetry.jsonl`, `pause.json`, and 45 s cooldown hysteresis. | `E-OCC2-R1-001`, `LabTelemetry.kt` |
-| Main10 & source precision | Main10 geometry, 10-bit ramp precision, regular 4K30/4K60 OCLog2, ISP ToneMap curve control, and `RAW_SENSOR`/physical cameras remain unverified on device. | `E-PURA-GEOM`, `E-OCC-CAPS` |
+## Verified Ground Truth After `تجربه1` & `تجربه2` (Runs 0–3, APK `281dc2b8` / `local-1795662984859`)
 
-## Active build order
-
-1. **Phase 1 (Complete):** Branch `research/autonomous-log-lab`, CI workflow update, `OpenCineCam-research (1).zip` evidence integration, `LabTelemetry.kt` + `telemetry.jsonl`/`pause.json` + cooldown hysteresis, enriched `LabProfiles.inventory()`.
-2. **Phase 2 (Complete on host; awaiting device run):** `HevcEncoderLevels`, `HevcSpsInspector`, coded-orientation `LabDecode`/`LabGeometry`/`LabVideo` upgrades, and `LabSyntheticEncoderProbe` (`CODEC_SYNTHETIC_MATRIX`, `X-02`/`X-03`). Verified via `:core:model:test`, `:camera:testDebugUnitTest`, `:media:testDebugUnitTest`, and `com.librestatic.opencinecam.research.*`.
-3. **Phase 3 (Complete on host; awaiting device run):** `ResearchEncoderOverride`, `LabRegularLogRunner` (4K30/4K60 regular-session `OCLog2` & GPU HEVC), `LabSourceProbe` (`ISP_TONEMAP_AB` + `SOURCE_FORMAT_PROBE`), and `LabDirectRecorder` (`DIRECT_HEVC_SURFACETEXTURE`, `setSessionParameters`, 30 s sustained window).
-4. **Phase 4 + API 31 Compatibility Fix (Complete on host + Research Lab debug APK rebuilt; awaiting device run):**
-   - `LabApiCompat.kt` isolates API 30/31/33/36 fields (`NoSuchFieldError: COLOR_CORRECTION_AVAILABLE_MODES` root-cause fix), adds non-absence API 31 discovery (`discoverColorCorrection`, `discoverDynamicRange`), empirical `ISP_COLOR_CORRECTION_PROBE`, cross-revision session preservation (`resumableOnDevice()`), and `Throwable`/`LinkageError` fault isolation (`executeIsolatedAttempt`).
-   - Verified: `:core:model:test`, `:camera:testDebugUnitTest`, `:media:testDebugUnitTest`, `com.librestatic.opencinecam.research.*` (`31/31` pass including `@Config(sdk = [31])` `LabApiCompatTest`), **0 `NewApi` errors** and **0 `research/` Lint findings** across `:app`/`:camera`/`:media`, and rebuilt `app/build/outputs/apk/debug/app-debug.apk` (`65,446,865` bytes, SHA-256 `9E303C6708AF1359B0512D85422AD3F8FBCE6FD4A4D0F631B99CC14F9FFEB82E`). Next: install (`adb install -r`) and run Research Lab APK on Huawei Pura 80 Pro (`LMR-LX9`).
+1. **`GPU_HEVC_4K30` (`Main` L5.0, `KEY_LEVEL=16384`) PROVEN across Runs 1, 2, 3:** `29.990 fps`, `39.18–39.83 Mbps`, `0` drops, `tv/bt709` (`R1-003`, `R2-003`, `R3-003`).
+2. **Sustained `30 s` Direct `4K60` HEVC PROVEN (`R2-007` Grayscale, `R3-007` Motion):** `1,788` / `1,780` frames, `59.920` / `59.923 fps`, `47.0–49.9 Mbps`, `p50=16.689 ms`, **`0` drops**, `thermalStatus <= 1`, continuous per-frame motion confirmed (`+3.0..+5.5 px/frame` on EIZO target). Dual-output `4K60 + 720p` (`005/006/012`) suffers `1–9` HAL drops (`camDrops == fileDrops`), except `R1-005` (`0` drops).
+3. **`1080p60` / `1080p30` AVC GPU Drops Localized Post-Sensor:** `cam = 0 drops` while `gpu == mux = 13 / 10 / 1` drops (`R2-019`, `R3-021`, `R3-018`).
+4. **Why `001` & `004/017` & `002/016` Failed (Lab/Config Bugs Isolated):**
+   - `001 CODEC_SYNTHETIC_MATRIX`: All `10` explicit-level arms passed `configure()` + `start()`, then failed `glCompileShader` (`P0005`) due to missing `.trimIndent()` (`LabSyntheticEncoderProbe.kt:504`). Notice `Main10` only advertises `Level 6.2 (16777216)` in `inventory.json`.
+   - `004/017` (`4K60` GPU/LOG): `LabRegularLogRunner.kt:271` passed `60M` which `RecordingDataRate.gpuVideoBps(..., 60)` doubled to `120M > 100M` HiSilicon cap.
+   - `002/016` (`LOG_REGULAR_4K30` Main10): Emitted `muxer_track` (`87 B csd-0`) and **`0` video samples** (`MP4 = 3,429 B`), exact Main10/EGL10/L6.2 cause next to test via fixed `001`.
+5. **API 31 ISP Tone/Color Probes & Safety Bug:**
+   - `008`: `TONEMAP_MODE_CONTRAST_CURVE (0)` works (`maxPts=257`), but sRGB-in-linear `PictureProfile.FLAT` + unlocked AE clipped `44.4%–69.0%` highlights!
+   - `009`: Empirically confirmed **`COLOR_CORRECTION_MODE_TRANSFORM_MATRIX (0)`** (`0%` clip) and **`TONEMAP_MODE_GAMMA_VALUE (3)`** (`0%` clip). **Arm 5 (`PRESET_SRGB`, mode `4`) crashed `cameraserver`**, blinding `010 SOURCE_FORMAT_PROBE` (`cameras: []`, false negative `H-08`) and crashing `011 DIRECT_HEVC` (`unknown device 0: -2`).
+6. **Grayscale & Red Cast:** Ramp `Y=25..234`, `182–188` distinct bins, `maxGap=1`, `0%` clip, zero red cast (`wall 173/178/168`). All accepted streams remain 8-bit `tv/bt709`; vendor key `com.huawei.capture.metadata.cuvaStateVideoMode` is exposed (`5` req keys, `50` res keys).
+7. **Storage Limit Explained:** Hardcoded `950 MB` cumulative cap (`LabTelemetry.kt:124`); Runs 0–3 took `663.6 MB`, so Run 4 hit `950 MB` at `21/24` despite `122 GB` free.

@@ -1,0 +1,88 @@
+# OpenCineCam Evidence Index (`تجربه1` & `تجربه2`, Pura 80 Pro `LMR-LX9`)
+
+Device under test: **Huawei Pura 80 Pro (`LMR-LX9`, Kirin 9020, EMUI 15, Android API 31)**  
+Build fingerprint: `HUAWEI/LMR-L29/HWLMR:12/HUAWEILMR-L29/104.3.1.187C185:user/release-keys`  
+Repository branch: `research/autonomous-log-lab` (branched from `research/pura80-capture-probes` @ `85574fa3`; see lineage note in [agent-handoff.md](agent-handoff.md)).  
+Host verification tool: [analyze_research_export.ps1](../../tools/analyze_research_export.ps1)
+
+---
+
+## 1. Original Export Archives (`C:\Users\zkrei\Downloads\نتايج`)
+
+> **Path note:** Actual Windows folder name is `نتايج` (without `ال`). Originals were never modified or deleted. Large `.mp4` and `.zip` binaries are kept out of git and indexed here by byte size, SHA-256, and container telemetry.
+
+| Archive | Size (Bytes) | SHA-256 | Total Entries | Contained Runs | Notes |
+|---|---:|---|---:|---|---|
+| `OpenCineCam-research (تجربه1).zip` | `370,092,250` | `5998690928E0729556C51A0CAAAD67A9EECAAEE77D69FB12D47FAC15E477B790` | 700 | Run 0, Run 1, Run 2 | ZIP header `50 4B 03 04` |
+| `OpenCineCam-research (تجربه2).zip` | `695,176,384` | `70D31CD843CFBF4FDDB762F8788EB7229949A802E991C93BB9E45AA52CEDCEDE` | 1,269 | Run 0, Run 1, Run 2, Run 3 | Cumulative `LabJournal.exportAll` export; **700/700 files from `تجربه1` are byte-identical** (`0` diffs), `+569` new files belong to Run 3 |
+
+---
+
+## 2. Run Inventory (Runs 0–3)
+
+| Run Label | Run Directory UUID | Created (Local `UTC+03`) | APK Revision | Attempts | Valid / Total MP4s | MP4 Size | `evidenceBytes` Range | Battery / Thermal / SoC Max | Visual Test Type (Verified from Frames) |
+|---|---|---|---|---:|---:|---:|---:|---|---|
+| **Run 0** | `1795660189408-46a3e2a7-58e8-407a-95e5-a7ed1c24b169` | `1795660189408` | pre-fix (`local-1795655794308`) | 0 | 0 / 0 | 0 B | 0 | `soc_thermal=30000`, `status=0` | Pre-API-31-fix crash (prior `NoSuchFieldError`) |
+| **Run 1** | `1795663114426-5b971718-e655-465c-bf76-4898aab52222` | `1795663114426` | `local-1795662984859` | 5 (paused) | 2 / 14 | 41.17 MB | `0 -> 40.7 MB` | `34.0 °C`, `status<=1`, `socMax=60000`, `sysHMax=37666` | Setup / Windows File Explorer + waving object on stick |
+| **Run 2 (`تجربه1` full)** | `1795663181380-583f93ca-7798-4797-919c-a3bb20c73bac` | `1795663181380` | `local-1795662984859` | **24 / 24** (`Experiment budget reached.`) | 11 / 26 | 311.26 MB | `41.4 -> 353.3 MB` | `status<=1`, `socMax=60000`, `sysHMax=38388` | **Grayscale Gradient Test** (full-screen dark-to-white ramp + red rose bouquet left + white wall top-right + RGB PC fan bottom-right) |
+| **Run 3 (`تجربه2` full)** | `1795666664106-e2c703f5-b1f6-451f-a33e-3446b5b8848c` | `1795666664106` | `local-1795662984859` | **24 / 24** (`Experiment budget reached.`) | 11 / 26 | 309.60 MB | `353.3 -> 663.6 MB` | `status<=1`, `socMax=60000`, `sysHMax=37055` | **Motion Test** (EIZO Monitor Test `13. RESPONSE TIME`, Background `Gray 50%`, Blue & White rects, Speed `1880 px/s`, Distance `150 px`) |
+
+> **Why Run 4 hit the 1 GB warning:** `LabTelemetry.kt:124` sets `MAX_EVIDENCE_BYTES = 950_000_000L` across **all runs combined** in `filesDir/research-lab`. After Runs 0–3 consumed `663.6 MB`, a 4th subsequent run (~`310 MB` per full run) crossed `950 MB` around attempt `21/24` (`~663.6 + 286.4 = 950 MB`), explaining the exact UI readout reported by the user (`Stage F — Baseline`, `21/24`, `2/10`, `31°C`, `Thermal status: 0`). Neither Run 2 nor Run 3 was truncated (`24/24` completed in both).
+
+---
+
+## 3. Complete Forensics Table — All 24 Valid MP4 Clips (`ffprobe` + Packet PTS)
+
+All 24 decoded MP4s report `yuv420p`, `color_range = tv` (Limited), `color_space = bt709`, `color_transfer = bt709`, `color_primaries = bt709`, `duplicatePts = 0`, `decodeReversals = 0`. `level = 150` = HEVC L5.0; `153` = HEVC L5.1; `40`/`42`/`51` = AVC L4.0/L4.2/L5.1.
+
+| Run | Att | LabPath & Request | Lab Verdict | Size (B) | SHA-256 (Full) | Codec / Prof / Lvl | Raster | Frames | Dur (s) | Calc FPS | Mbps | p50 Gap (ms) | p95 Gap (ms) | Max Gap (ms) | Drops (>1.5x) |
+|---|---|---|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| R1 (`5b971718`) | `003` | `GPU_HEVC_4K30` 4K30 | `OBSERVED` | 20,255,323 | `38917AD35FF2...` *(see `ffprobe_all`)* | `hevc` Main L150 | 3840x2160 | 122 | 4.068 | 29.990 | 39.83 | 33.344 | 33.345 | 40.733 | 0 |
+| R1 (`5b971718`) | `005` | `DIRECT_HEVC_SURFACETEXTURE` 4K60 | `OBSERVED` | 22,914,051 | `3BA195D4AFCB...` | `hevc` Main L153 | 3840x2160 | 229 | 3.821 | 59.920 | 47.97 | 16.689 | 16.689 | **16.689** | **0** |
+| R2 (`583f93ca`) | `003` | `GPU_HEVC_4K30` 4K30 | `OBSERVED` | 19,922,267 | `50256F54D818...` | `hevc` Main L150 | 3840x2160 | 122 | 4.068 | 29.990 | 39.18 | 33.344 | 33.345 | 33.345 | 0 |
+| R2 (`583f93ca`) | `005` | `DIRECT_HEVC_SURFACETEXTURE` 4K60 | `MISMATCH` | 22,420,520 | `C686F5AF5A5F...` | `hevc` Main L153 | 3840x2160 | 219 | 3.755 | 58.316 | 47.77 | 16.689 | 16.689 | 33.433 | 6 |
+| R2 (`583f93ca`) | `006` | `DIRECT_HEVC_SURFACETEXTURE` 4K60 (retry) | `MISMATCH` | 22,021,130 | `D38DB5422FE4...` | `hevc` Main L153 | 3840x2160 | 219 | 3.721 | 58.841 | 47.34 | 16.689 | 16.689 | 33.367 | 4 |
+| R2 (`583f93ca`) | `007` | `DIRECT_HEVC` 4K60 (`30 s`) | **`OBSERVED`** | 175,362,676 | `9EAF10B3E5ED...` | `hevc` Main L153 | 3840x2160 | **1788** | **29.837** | **59.920** | 47.02 | 16.689 | 16.689 | **16.689** | **0** |
+| R2 (`583f93ca`) | `012` | `DIRECT_HEVC_PREVIEW` 4K60 | `MISMATCH` | 21,946,516 | `1DCAB7E0E29F...` | `hevc` Main L153 | 3840x2160 | 214 | 3.719 | 57.531 | 47.21 | 16.689 | 16.767 | 33.478 | 9 |
+| R2 (`583f93ca`) | `014` | `HEVC` 4K30 (prod fallback -> AVC) | `MISMATCH` | 9,514,152 | `648A726999E6...` | `h264` High L51 | 3840x2160 | 120 | 4.037 | 29.724 | 18.85 | 33.344 | 33.356 | 68.922 | 1 |
+| R2 (`583f93ca`) | `018` | `AVC` 1080p30 | `OBSERVED` | 9,810,839 | `EFA612F61BBF...` | `h264` High L40 | 1920x1080 | 121 | 4.035 | 29.990 | 19.45 | 33.344 | 33.345 | 33.345 | 0 |
+| R2 (`583f93ca`) | `019` | `AVC` 1080p60 | `MISMATCH` | 19,476,575 | `A3D85BBAAB0D...` | `h264` High L42 | 1920x1080 | 234 | 4.138 | 56.526 | 37.65 | 16.689 | 33.366 | 50.056 | 13 |
+| R2 (`583f93ca`) | `021` | `AVC` 1080p25 | `OBSERVED` | 7,972,539 | `84F2EA2BB4AE...` | `h264` High L40 | 1920x1080 | 101 | 4.040 | 25.000 | 15.79 | 40.000 | 40.000 | 40.000 | 0 |
+| R2 (`583f93ca`) | `022` | `AVC` 4K25 | `OBSERVED` | 8,106,393 | `72C1DA684B10...` | `h264` High L51 | 3840x2160 | 101 | 4.040 | 25.000 | 16.05 | 40.000 | 40.000 | 40.000 | 0 |
+| R2 (`583f93ca`) | `023` | `AVC` 4K30 | `OBSERVED` | 9,816,040 | `B8ED69B53EEE...` | `h264` High L51 | 3840x2160 | 122 | 4.068 | 29.990 | 19.30 | 33.344 | 33.345 | 33.345 | 0 |
+| R3 (`e2c703f5`) | `003` | `GPU_HEVC_4K30` 4K30 | `OBSERVED` | 20,510,945 | `4DBD015A928B...` | `hevc` Main L150 | 3840x2160 | 124 | 4.135 | 29.990 | 39.69 | 33.344 | 33.345 | 33.345 | 0 |
+| R3 (`e2c703f5`) | `005` | `DIRECT_HEVC_SURFACETEXTURE` 4K60 | `MISMATCH` | 20,262,535 | `6A898C84F906...` | `hevc` Main L153 | 3840x2160 | 215 | 3.689 | 58.279 | 43.95 | 16.689 | 16.689 | 33.378 | 6 |
+| R3 (`e2c703f5`) | `006` | `DIRECT_HEVC_SURFACETEXTURE` 4K60 (retry) | `MISMATCH` | 20,603,806 | `6891982940AA...` | `hevc` Main L153 | 3840x2160 | 218 | 3.754 | 58.063 | 43.91 | 16.689 | 16.689 | 33.367 | 7 |
+| R3 (`e2c703f5`) | `007` | `DIRECT_HEVC` 4K60 (`30 s`) | **`OBSERVED`** | 185,226,017 | `FFAD3928AD95...` | `hevc` Main L153 | 3840x2160 | **1780** | **29.704** | **59.923** | 49.89 | 16.689 | 16.722 | **17.389** | **0** |
+| R3 (`e2c703f5`) | `012` | `DIRECT_HEVC_PREVIEW` 4K60 | `MISMATCH` | 16,933,604 | `BDE98A0712F4...` | `hevc` Main L153 | 3840x2160 | 223 | 3.739 | 59.646 | 36.23 | 16.689 | 16.711 | 33.333 | 1 |
+| R3 (`e2c703f5`) | `014` | `HEVC` 4K30 (prod fallback -> AVC) | `MISMATCH` | 9,620,035 | `F252039E8772...` | `h264` High L51 | 3840x2160 | 121 | 4.076 | 29.680 | 18.88 | 33.344 | 33.356 | 68.422 | 1 |
+| R3 (`e2c703f5`) | `018` | `AVC` 1080p30 | `MISMATCH` | 9,119,634 | `68F5FFEBAE3B...` | `h264` High L40 | 1920x1080 | 122 | 4.101 | 29.744 | 17.79 | 33.344 | 33.345 | 66.678 | 1 |
+| R3 (`e2c703f5`) | `020` | `AVC` 1080p25 | `OBSERVED` | 7,665,236 | `FBA6773CAA04...` | `h264` High L40 | 1920x1080 | 102 | 4.080 | 25.000 | 15.03 | 40.000 | 40.000 | 40.744 | 0 |
+| R3 (`e2c703f5`) | `021` | `AVC` 1080p60 | `MISMATCH` | 19,382,434 | `B54FD11B98E8...` | `h264` High L42 | 1920x1080 | 234 | 4.072 | 57.456 | 38.08 | 16.689 | 16.689 | 33.378 | 10 |
+| R3 (`e2c703f5`) | `023` | `AVC` 1080p24 | `OBSERVED` | 7,559,087 | `0DC519A3537F...` | `h264` High L40 | 1920x1080 | 99 | 4.125 | 24.002 | 14.66 | 41.656 | 41.656 | 42.377 | 0 |
+| R3 (`e2c703f5`) | `024` | `AVC` 4K24 | `OBSERVED` | 7,744,691 | `ED4C9C92B690...` | `h264` High L51 | 3840x2160 | 98 | 4.082 | 24.006 | 15.18 | 41.656 | 41.667 | 42.366 | 0 |
+
+---
+
+## 4. Failed, Header-Only & Zero-Byte Artifacts (42 MP4 files across Runs 1–3)
+
+| Attempts | File Pattern | Bytes | Container / Failure Signature | Root Cause Summary |
+|---|---|---:|---|---|
+| `R1-001`, `R2-001`, `R3-001` | `synthetic_*.mp4` (10 files/run, 30 total) | `0` | Empty file created by `MediaMuxer(...)` before GL shader compile failure; not deleted in `finally` | `main8_no_level` & `main10_no_level` failed at `configure` (`0x80001001`); all **10 explicit-level arms passed `configure()` + `egl_window` + `start()`** and failed at GLSL compile `0:2: P0005: #version must be on the first line` (`LabSyntheticEncoderProbe.kt:504` lacked `.trimIndent()`). |
+| `R1-002`, `R2-002`, `R2-016`, `R3-002`, `R3-016` | `clip.mp4` (5 files) | **`3,429`** | Top-level ISO-BMFF boxes: `ftyp(24), moov(793), free(2596), mdat(1)`; **0 video samples** (`mux=0`, `cam=128..129`) | `LOG_REGULAR_4K30` (`Main10`, `level=16384`, `EGL10`, `BT2020_LINEAR_EXT`) passed `configure`, `egl_window`, `codec_start`, and emitted `muxer_track` (`csd-0 = 87 B`), then emitted **zero packets** over `~4.3 s` and failed `hasRequiredEncodedSamples(0)` at finalization. |
+| `R1-004`, `R2-004`, `R3-004`, `R2-017`, `R3-017` | `clip.mp4` (5 files) | `0` | Empty placeholder; exception at `OpenCineLogGpuPipeline.kt:1083` (`configure`) | `GPU_HEVC_4K60` / `LOG_REGULAR_4K60` passed `60_000_000` into `RecordingDataRate.gpuVideoBps(..., 60)`, doubling bitrate to `120_000_000` bps (`> 100_000_000` encoder ceiling) -> `IllegalArgumentException`. |
+| `R2-015`, `R3-015` | `clip.mp4` (2 files) | `0` | Empty placeholder; `MediaCodec$CodecException: Error 0x80001001` at `configure` | `LOG` HFR `1080p120` configured `profile=2 (Main10)`, **no `KEY_LEVEL`**, `bitrate=80_000_000` (Main10 only advertises `2:16777216` L6.2, and `LabVideo` omits explicit `KEY_LEVEL`). |
+
+---
+
+## 5. Non-Video Empirical Probe Attempts (No MP4 Expected)
+
+| Run / Attempt | Path | Verdict | Key Quantitative Result |
+|---|---|---|---|
+| `R2-008`, `R3-008` | `ISP_TONEMAP_AB` (4K30 YUV) | `OBSERVED` | `TONEMAP_MODE_CONTRAST_CURVE (0)` accepted (`maxPts=257`). R2: `mean 88.1 -> 179.9`, `p50 53 -> 226`, `highlightClip 0.02% -> 44.41%`. R3: `mean 121.7 -> 212.9`, `p50 149 -> 255`, `highlightClip 0.02% -> 68.98%`. |
+| `R2-009`, `R3-009` | `ISP_COLOR_CORRECTION_PROBE` | `OBSERVED` | API 31 empirical discovery: `COLOR_CORRECTION_MODE` `[1=FAST, 2=HIGH_QUALITY, 0=TRANSFORM_MATRIX]` (mode 0 `mean=107.3, max=233, 0% clip`), AND `TONEMAP_MODE_GAMMA_VALUE (3)` (`gamma=2.2`, `mean=101.5, min=19, max=199, 0% clip`). Arm 5 (`PRESET_SRGB`, mode `4`) triggered `CameraDevice was already closed`. |
+| `R2-010`, `R3-010` | `SOURCE_FORMAT_PROBE` | **`OBSERVED` (FALSE NEGATIVE)** | **`cameras: []` (empty!)** because `cameraserver` transiently restarted/hid Camera 0 right after `009` Arm 5 crashed it! Only verified `huaweiCameraKitClasses = false`. `RAW_SENSOR`/`RAW10`/`P010` probe NEVER ran! |
+| `R2-011`, `R3-011` | `DIRECT_HEVC` 4K60 (4s) | `FAILED` | `getCameraCharacteristics:967: Unable to retrieve camera characteristics for unknown device 0: No such file or directory (-2)` — direct casualty of the transient CameraService fault after `009`/`010`. |
+| `R2-013`, `R3-013` | `CODEC_LEVEL_PAIR` | `MISMATCH` | `OMX.hisi.video.encoder.hevc` Main 4K30: `level=null` -> `configure` `0x80001001`; `level=65536 (L5.1)` -> `start` OK (`admitted=true`). Reproduces across R2 and R3 (`H-01` proven, though `knowledge.json` missed it via event-name bug). |
+| `R2-020`, `R3-019`, `R3-022` | `AVC previewOnly=true` | `OBSERVED` | 1080p60 (`R2-020`, `R3-022`) & 1080p30 (`R3-019`) preview-only Camera2 baselines completed without error. |
+| `R2-024` | `AVC 4K60` (unlisted) | `MISMATCH` | Sensor reported `59.925 fps` (`10` frames, `[60, 60]`), rejected because `Camera2PreviewEngine` substituted `1920x1080` for unlisted `3840x2160@60`. |

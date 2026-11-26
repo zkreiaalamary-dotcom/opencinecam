@@ -1,64 +1,43 @@
-# تسليم تطوير OpenCineCam Research Lab
+# OpenCineCam Engineering Handoff — Huawei Pura 80 Pro (`LMR-LX9`)
 
-## نقطة الاستلام
+**Last updated:** 2026-11-26 (post forensic analysis of `تجربه1` & `تجربه2` exports in `C:\Users\zkrei\Downloads\نتايج`)  
+**Target device:** Huawei Pura 80 Pro (`LMR-LX9`, Kirin 9020, EMUI 15, Android API 31, `HUAWEI/LMR-L29/...`)  
+**Active research branch:** `research/autonomous-log-lab` (HEAD `281dc2b8` prior to these docs)
 
-- المستودع هو [zkreiaalamary-dotcom/opencinecam](https://github.com/zkreiaalamary-dotcom/opencinecam). عمل المختبر محصور في فرع `research/self-exploring-lab`. افتح أي فرع تطوير لاحق انطلاقًا من هذا الفرع.
-- أساس المشروع `main` عند `59a5260a1a5ce0e73a101057be8f34586933abe4`، وأساس بناء Pura عند `970214428cff7369dce571ac7622549c5719382e`. آخر كود بُني واختُبر قبل إضافة وثيقة التسليم هو `f02a4813d7157fb550437243c64c1818dbf0efb4`.
-- `6b8f22b1` أضاف المختبر ودمجه مع محرك التصوير. `ddaced03` أضاف فحص فك إطار وبصمة الملف واختبار الاستئناف. `f02a4813` صحّح نوع الإرجاع في مراقب توقيت GPU.
-- [التصميم الهندسي](self-exploring-lab.md) يشرح المسارات، وشروط قبولها، وحدود الاستدلال من بياناتها.
+> **Branch Topology Clarification:** `research/self-exploring-lab` (`adc19ce1`) was the earlier baseline branch. Subsequent development progressed through `research/pura80-capture-probes` (`85574fa3`) onto **`research/autonomous-log-lab` (`281dc2b8`)**, which produced the APK (`local-1795662984859`) tested in `تجربه1` and `تجربه2`. Keep `main` and `pura-apk-build` untouched unless explicitly instructed.
 
-## ما أُضيف وأين
+---
 
-الملفات التالية تحت `app/src/main/java/com/librestatic/opencinecam/research/` ما لم يُذكر مسار آخر.
+## Documentation Map (`docs/research/`)
 
-| الملف | ما يفعله |
-| --- | --- |
-| `ResearchLabScreen.kt` | واجهة البدء والاستئناف والإيقاف وتصدير ZIP عبر منتقي ملفات Android. |
-| `ResearchLaboratory.kt` | إدارة الجلسة، وعزل حالة التشغيل عن إعدادات المستخدم، وحدود زمن التجارب والحرارة والبطارية والتخزين. يستخدم `RawVideoQualifier` لاختبارات RAW عندما يتوفر المسار. |
-| `LabProfiles.kt` | يجمع ملفات تعريف التطبيق ومقاسات Camera2 ونطاقات AE، ويولّد التجارب الممكنة نظريًا. الفارق بين المرشح وبين ما يقبله المحرك موضع تطوير. |
-| `LabSearch.kt` | يختار التجربة التالية وفق النتيجة السابقة. يستطيع عزل المعاينة، أو تغيير عامل مثل معدل الإطارات أو المقاس أو المشفّر، ويسجّل التجربة الأم والفرضية. |
-| `LabVideo.kt` | يستدعي `Camera2PreviewEngine.startPreview` و`startVideo` أو `startOpenCineLogVideo`، ويستخدم مخرجاتهما لتسجيل ملف خاص بالتجربة. |
-| `LabSignals.kt` و`camera/.../Camera2ResearchObserver.kt` | يقرآن توقيت Camera2 وGPU ومدخل الـmuxer، ونطاق AE المطلوب والمبلّغ، وأحداث تغيير المسار. يرتبط مراقب Camera2 فقط بنسخة المحرك التي يفتحها المختبر. |
-| `LabDecode.kt` | يتحقق من إمكانية فك إطار ممثل ويحسب SHA‑256 للمقطع. إحصاءات RGB قد تتأثر بتحويل Android للعرض. |
-| `LabJournal.kt` | يحفظ كل مرحلة ونتيجة تدريجيًا، ويستعيد آخر مرحلة عند الانقطاع، ويصدّر الحزمة مع المقاطع. |
+- [Deep Forensic Analysis](deep-analysis.md) — Scene verification, tripod wobble & monitor confounds, sensor-to-muxer cadence, grayscale ramp & color cast measurements, GPU/LOG mismatch trace, Lab bug audit, and 5-tier epistemic classification.
+- [Evidence Index](evidence-index.md) — Exact SHA-256 hashes, run UUIDs, all 24 valid MP4 packet-PTS metrics, failed/header-only (`3,429 B`) container breakdown, and non-video probes.
+- [Hypotheses & Causal Ranking](hypotheses.md) — Corrected `H-01..H-10` table + ranked competing causes for every failure (`001`, `002`, `004/017`, `005/006`, `008`, `009->010->011`, `015`, `019/021`).
+- [Engineering Roadmap & Dynamic Storage](engineering-roadmap.md) — Ranked unused opportunities, phased app/lab roadmap, and architecture replacing the hardcoded 950 MB evidence limit.
+- [Next Experiments](next-experiments.md) — Top 5 single-variable discriminating experiments with locked AE/AWB controls.
+- [Reproducible Analyzer Script](../../tools/analyze_research_export.ps1) — Offline PowerShell + `ffprobe`/`ffmpeg` verifier.
 
-نقطة الدخول هي **Settings → About and diagnostics → Camera capabilities → Research Lab** بعد إذن الكاميرا. الربط في `CameraScreen.kt` و`diagnostics/CameraCapabilitiesScreen.kt`. حزمة المختبر هي `com.librestatic.opencinecam.researchlab`، واسمها **OpenCineCam Lab**. تعمل الاختبارات بصمت في الواجهة وتستخدم ملفات خاصة بالتطبيق. لم تتغير خوارزميات المحرك أو فلاتر قبول ملفات التعريف في هذه التسليمات.
+---
 
-## ما ثبت على Pura 80 Pro
+## Ground-Truth Capability Snapshot (After `تجربه1` & `تجربه2`)
 
-مصدر نتائج التشغيل هو `OpenCineCam-research.zip` من الهاتف **LMR-LX9** بنظام Android **API 31**. الجلسة على الكاميرا `0` وبإعداد تسجيل يطلب **20 Mbps**. انتهت بعد 12 محاولة عند سقف التجارب وجمعت 8 ملفات فيديو غير فارغة. بقيت الحزمة الأصلية ومقاطعها لدى المستخدم. تستطيع إعادة قراءة كل سطر من مجلد المحاولة الذي يبدأ بالرقم المبين أدناه.
+| Domain | Verified Fact (With Evidence) |
+|---|---|
+| **GPU -> HEVC `4K30` (`Main` L5.0)** | **PROVEN (`R1-003`, `R2-003`, `R3-003`):** First-ever Pura 80 Pro `OpenCineLogGpuPipeline` -> `OMX.hisi.video.encoder.hevc` 4K30 (`29.990 fps`, `39.2–39.8 Mbps`, `0` drops across all 3 runs) using explicit `KEY_LEVEL=16384`. Previous AVC fallbacks (`014`) occurred strictly because production omitted `KEY_LEVEL`. |
+| **Direct `4K60` HEVC (`Main` L5.1, `30 s`)** | **PROVEN (`R2-007`, `R3-007`):** Sustained `~30 s` (`1,788` / `1,780` frames), `59.920` / `59.923 fps`, `47.0–49.9 Mbps`, `p50=16.689 ms`, **`0` drops**, `thermalStatus <= 1`, clean visual motion (`+3.0..+5.5 px/frame` on EIZO target). |
+| **2-Target Direct `4K60` (`+ 720p Preview`)** | **PARTIAL (`R1-005` `0` drops vs `R2/R3 005,006,012` `1–9` drops):** Exact `camDrops == fileDrops` proves drops occur inside Camera2/HAL servicing dual outputs, not thermal throttle or encoder. |
+| **HEVC `Main10` (`4K30` & `4K60`)** | **UNRESOLVED / BLOCKED BY LAB BUGS:** `001` proved `Main10` + `10-bit EGL` `configure()` & `start()` succeed (`0/10` failures before shader compile!), then crashed in `glCompileShader` due to missing `.trimIndent()` (`P0005`). Live `002/016` emitted `muxer_track` (`87 B csd-0`) and **`0` encoded frames** (`3,429 B` MP4); Note `inventory.json` advertises Main10 **ONLY at Level 6.2 (`16777216`)**, not Level 5.0 (`16384`). |
+| **`GPU_HEVC_4K60` & `LOG_REGULAR_4K60`** | **UNTESTED (BUG):** `LabRegularLogRunner` passed `60M` which `RecordingDataRate.gpuVideoBps` doubled to **`120 Mbps > 100 Mbps`** HiSilicon ceiling (`004/017`). |
+| **`1080p60` / `1080p30` AVC GPU Drops** | **POST-SENSOR BOTTLENECK PROVEN:** `cam = 0 drops` while `gpu == mux = 13/10/1 drops` (`R2-019`, `R3-021`, `R3-018`) with real frozen frames confirmed visually. |
+| **API 31 ISP Controls (`008`, `009`)** | **`TONEMAP_MODE_CONTRAST_CURVE (0)`** (`FLAT`) works in HAL (`maxPts=257`) **but** sRGB-in-linear + unlocked AE causes **`44–69%` highlight clip**! Empirically discovered **`COLOR_CORRECTION_MODE_TRANSFORM_MATRIX (0)`** and **`TONEMAP_MODE_GAMMA_VALUE (3)`** with **`0%` clip** on API 31. Warning: **`PRESET_SRGB (4)` crashes `cameraserver`**, which blinded `010` (`cameras: []`) and killed `011` (`unknown device 0: -2`). |
+| **Grayscale & Color Quality (`R2`)** | Clean monitor ramp `Y=25..234`, `182–188` distinct bins, `maxEmptyGap=1` (no posterization), `0%` clip/crush, **zero red cast** (`wall R/G/B=173/178/168`). Effective >8-bit & true LOG remain unproven (`SDR_BT709_ISP` is post-ISP 8-bit). |
+| **Accepted Sizes & Vendor Keys (`cam 0`)** | `40` identical `SurfaceTexture` & `MediaRecorder` sizes (max `4096x3072`, `3840x2160` reports `33.33 ms` min duration hiding `4K60`). **5 Huawei vendor request/session keys** including **`com.huawei.capture.metadata.cuvaStateVideoMode`** (HDR Vivid) + **50 result keys**. |
+| **1 GB Storage Limit (`950 MB`)** | Cumulative across runs (`Runs 0–3 = 663.6 MB`); a 4th run crosses `950 MB` at `21/24` despite `122 GB` free. Neither `تجربه1` nor `تجربه2` lost data (`24/24` completed in both). |
 
-| المحاولة | ما سجّله الاختبار |
-| --- | --- |
-| `001` و`004` | AVC ‏1080p30 و1080p25 اجتازا فحص الملف القصير عند 29.97 و25.02 إطار/ث. |
-| `002` و`003` | AVC ‏1080p60 أعطى 59.49 إطار/ث مع فجوة 30.25 ms ظهرت أولًا في توقيت Camera2 وتكررت عند GPU والـmuxer والملف. معاينة 60 إطار/ث وحدها أعطت أكبر فجوة 16.91 ms. تكرار التجربة مطلوب لتحديد سبب الفجوة. |
-| `005` و`006` | AVC ‏4K25 و4K30 اجتازا فحص الملف القصير عند 25.00 و30.03 إطار/ث. |
-| `007` و`008` | تجربة AVC ‏4K60 غير المدرجة وصلت إلى نتائج Camera2 مع نطاق AE ‏`[60, 60]`. توقف التسجيل في شرط `Recording geometry does not match the active source`. معاينة التجربة وحدها استمرت، والمقاس المسجّل في الملف يظل غير متاح. مخزن 640×360 في السجل يصف خرج المعاينة بعد GPU. |
-| `009` و`010` | AVC ‏4K24 اجتاز الفحص عند 24.04 و24.01 إطار/ث. المحاولة الأطول قاربت عشر ثوانٍ وأنتجت 241 عينة فيديو. |
-| `011` | OCLog2 ‏1080p120 دخل مسار HFR من مصدر `SDR_BT709_ISP`، ووصل نطاق AE ‏`[120, 120]`. توقفت تهيئة المشفّر بـ`MediaCodec.CodecException: Error 0x80001001` قبل وجود فيديو. |
-| `012` | طلب HEVC ‏4K30، ورفض `OMX.hisi.video.encoder.hevc` إعدادات هذه المحاولة بـ`0x80001001`. تراجع المحرك إلى AVC، وأعطى الملف 29.99 إطار/ث. |
+---
 
-تقرير القدرات من التطبيق الأصلي يؤكد API 31. جرد المختبر على الكاميرا `0` سجّل `hlg10Advertised=false` و`raw10Sizes=[]`. لذلك ما عندنا تشغيل ميداني لـLOG العادي عند 4K30 أو 4K60، ولا اختبار RAW10 أو HLG/HDR10 على هذه الكاميرا في هذه الجلسة. قياس دقة المصدر الفعلية ما زال مجهولًا. وسم Main10 عند توفره يصف الملف المشفّر.
+## Immediate Next Actions for Following Agent
 
-## من أين يبدأ الوكيل التالي
-
-1. **أولوية أولى — دقة دليل 4K60.** في `Camera2PreviewEngine.kt` يمرّ `activeVideoProfile` بشرط وجوده في `descriptor.videoProfiles`. إن رُفض الملف التجريبي، يستطيع مسار معاينة GPU اختيار `baseViewfinderSize(descriptor)` بينما `LabVideo.kt` يبني هندسة التسجيل من المقاس المطلوب. يتوافق هذا مع توقف `007`، والمقاس الفعلي للمصدر غائب من الحزمة. سجّل المقاس والملف المقبولين داخل المحرك قبل الاستنتاج، واجعل تجربة خارج القائمة تميّز بين رفض ملف التعريف، ومعاينة بديلة، واختبار التسجيل بالمقاس الحقيقي. أبقِ أي قبول تجريبي خارج القائمة محصورًا في المختبر وصلاحيات Camera2 العامة.
-2. **أولوية ثانية — عزل رفض HEVC.** استخدم `011` و`012` لتسجيل اسم المشفّر، وملف تعريفه ومستواه، و`MediaFormat` الذي وصل إلى `configure`، ومرحلة الرفض. نفّذ مقارنة مضبوطة تغيّر عاملًا واحدًا مثل معدل البت أو المقاس. نسخة المختبر الحالية تطلب 20 Mbps، وتجربة المستخدم عند 40 Mbps من التطبيق العادي تحتاج تكرارًا موثّقًا على نفس المسار.
-3. **أولوية ثالثة — انحراف 1080p60.** كرّر `002` و`003` على إضاءة ثابتة. قارن الفجوات عبر طوابع Camera2 وGPU والـmuxer والملف. حافظ على التمييز بين فجوة في التوقيت وفقدان إطار في عدّاد Camera2.
-4. **حدود الإصدار الحالي.** تجربة RAW تقيس تدفق RAW10 والضغط عند توفرهما. تسجيل `.ocraw` كامل يحتاج عملًا إضافيًا. فحص فك الترميز الحالي يغطي إطارًا واحدًا. تحقق الدقة اللونية يحتاج قياسًا مستقلاً ومشهدًا مضبوطًا. راجع سجل الحرارة والمدة قبل وصف النتائج بالاستدامة أو تعميمها على كاميرات الجهاز الأخرى.
-
-في كل تعديل، حافظ على `main` و`pura-apk-build` خارج نطاق الدمج ما لم يطلب المستخدم ذلك. التزم بالفرع التجريبي، وأضف اختبارًا للفجوة التي تعالجها. سجّل حالات الرفض والتراجع باسم المرحلة. احتفظ بمقاطع الهاتف وتصديراته الأصلية خارج المستودع العام.
-
-## التحقق والبناء
-
-- [GitHub Actions على `f02a4813`](https://github.com/zkreiaalamary-dotcom/opencinecam/actions/runs/45318805955) نجح في البناء، والتحقق من توقيع APK ومعرّف الحزمة، واختبارات `:core:model` و`:camera` و`:media` و`:app`. شملت الاختبارات `LabSearchTest` و`LabJournalTest`. فُحصت واجهة البدء والإيقاف عبر Compose Driver ببيانات اختبار.
-- للبناء استخدم JDK 17 وAndroid Platform 37 وNDK `27.1.12297006` وCMake `3.22.1`. ناتج الأمر هو `app/build/outputs/apk/debug/app-debug.apk`.
-
-```bash
-./gradlew --dependency-verification=strict -Popencinecam.researchLab=true :app:assembleDebug
-./gradlew --dependency-verification=strict :core:model:test :camera:testDebugUnitTest :media:testDebugUnitTest :app:testDebugUnitTest
-```
-
-على Windows استخدم `gradlew.bat` واقتبس وسيط `-Popencinecam.researchLab=true` في PowerShell. لضغط APK الموزّع للمستخدم، فُعّل `packaging.dex.useLegacyPackaging` في إعداد البناء المحلي وحده. تطابقت محتويات 225 عنصرًا داخل الحزمتين وتطابق الموقّع، وبصمة SHA‑256 لملف `OpenCineCam-Lab.apk` الموزّع هي `e5aeb6ddecfef7f251b54f6b00a80aa33fb4678547b0a91dbd066a120f8c7c63`.
-
-لتحليل تصدير جديد افتح `inventory.json` أولًا لمعرفة شروط الإتاحة، ثم `summary.json` لربط المحاولات، ثم `000-requested.json` وملفات المراحل و`result.json` من المحاولة. في التقرير الهندسي، احفظ رقم المحاولة وملف دليلها، وميّز نوع المشفّر المطلوب عن نوع المقطع الناتج، وسمِّ أي فرضية تحتاج تجربة تالية.
+1. Fix the **6 Research Lab bugs** (`LabSyntheticEncoderProbe.kt` `.trimIndent()` + `Main10 L6.2` + delete 0-byte temps; `LabRegularLogRunner.kt` bitrate clamp `<= 100M` + wire `onRecordedFrame`; `LabSourceProbe.kt` remove crashing `PRESET_SRGB` & fail if `cameras.isEmpty()`; `LabKnowledgeBase.kt` `codec_arm_result` + `previewOnly` in `baseKey`) + add Dynamic Storage Manager.
+2. Run the 5 discriminating experiments in [next-experiments.md](next-experiments.md) on `LMR-LX9`.
+3. Only after Lab verifies `Main10` and `4K60`, promote explicit `KEY_LEVEL`, bitrate ceiling clamp, safe `4K60` Direct/GPU unlock, and fixed API 31 ISP tone/color controls to production `camera/`.
