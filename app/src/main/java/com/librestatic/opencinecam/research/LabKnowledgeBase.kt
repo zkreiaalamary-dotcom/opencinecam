@@ -98,6 +98,22 @@ internal data class ContradictionRecord(
     )
 }
 
+internal data class RecordedErrorEntry(
+    val scope: String,
+    val attemptId: String?,
+    val errorClass: String,
+    val message: String?,
+    val sdkInt: Int,
+) {
+    fun toJson(): JSONObject = json(
+        "scope" to scope,
+        "attemptId" to attemptId,
+        "errorClass" to errorClass,
+        "message" to message,
+        "sdkInt" to sdkInt,
+    )
+}
+
 /**
  * Persistent cumulative knowledge base inside the active run directory (`knowledge.json`).
  * Tracks falsifiable hypotheses (H-01..H-10), learned MediaCodec/EGL recipes, contradictions
@@ -107,6 +123,8 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
     private val hypotheses = LinkedHashMap<String, HypothesisEntry>()
     val recipes = mutableListOf<LearnedEncoderRecipe>()
     val contradictions = mutableListOf<ContradictionRecord>()
+    val recordedErrors = mutableListOf<RecordedErrorEntry>()
+    private val ingestedAttempts = LinkedHashSet<String>()
     private val caseVerdicts = LinkedHashMap<String, MutableList<Pair<String, LabVerdict>>>()
 
     var hlg10Advertised: Boolean? = null
@@ -124,6 +142,8 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
     var bestDirect4k60Summary: String? = null
         private set
     var toneMapFlatVerdict: String? = null
+        private set
+    var colorCorrectionEmpiricalVerdict: String? = null
         private set
     var highPrecisionSourceAdmitted: Boolean? = null
         private set
@@ -154,6 +174,18 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
 
     fun ingestInventory(inv: JSONObject) {
         if (inv.has("hlg10Advertised")) hlg10Advertised = inv.optBoolean("hlg10Advertised")
+        inv.optJSONArray("inventoryErrors")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                recordError(
+                    scope = "inventory:${item.optString("section")}",
+                    attemptId = null,
+                    errorClass = item.optString("errorClass"),
+                    message = item.optString("message").takeIf { it.isNotBlank() },
+                    sdkInt = item.optInt("sdkInt", android.os.Build.VERSION.SDK_INT),
+                )
+            }
+        }
         if (inv.has("huaweiCameraKitClassPresent")) {
             val present = inv.optBoolean("huaweiCameraKitClassPresent")
             cameraKitPresent = present
@@ -170,13 +202,51 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         save()
     }
 
+    fun recordError(
+        scope: String,
+        attemptId: String?,
+        errorClass: String,
+        message: String?,
+        sdkInt: Int = android.os.Build.VERSION.SDK_INT,
+    ) {
+        val entry = RecordedErrorEntry(scope, attemptId, errorClass, message, sdkInt)
+        if (recordedErrors.none { it.scope == entry.scope && it.attemptId == entry.attemptId && it.errorClass == entry.errorClass }) {
+            recordedErrors += entry
+        }
+    }
+
+    fun syncFromPriorAttempts(journal: LabJournal) {
+        val results = journal.history()
+        var addedAny = false
+        for (res in results) {
+            if (res.id in ingestedAttempts || res.verdict == LabVerdict.STOPPED) continue
+            val resultJson = journal.readResultJson(res.id)
+            val reason = resultJson?.optString("reason")?.takeIf { it.isNotBlank() && it != "null" }
+            val events = journal.readAttemptEvents(res.id)
+            ingestAttempt(res.id, res.attempt, res.verdict, reason, events, saveImmediately = false)
+            addedAny = true
+        }
+        if (addedAny) save()
+    }
+
     fun ingestAttempt(
         attemptId: String,
         case: LabCase,
         verdict: LabVerdict,
         reason: String?,
         events: List<JSONObject>,
+        saveImmediately: Boolean = true,
     ) {
+        if (!ingestedAttempts.add(attemptId)) return
+        events.lastOrNull { it.optString("event") == "attempt_error" }?.let { errEv ->
+            recordError(
+                scope = case.path.name,
+                attemptId = attemptId,
+                errorClass = errEv.optString("errorClass"),
+                message = errEv.optString("errorMessage").takeIf { it.isNotBlank() },
+                sdkInt = errEv.optInt("sdkInt", android.os.Build.VERSION.SDK_INT),
+            )
+        }
         val baseKey = "${case.camera}/${case.path.name}/${case.width}x${case.height}/${case.fps}/${case.hfr}/${case.longer}/${case.flatToneMap}"
         val prior = caseVerdicts.getOrPut(baseKey) { mutableListOf() }
         if (prior.isNotEmpty()) {
@@ -201,11 +271,12 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
             LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
                 ingestDirect4k60(attemptId, case, verdict, reason, events)
             LabPath.ISP_TONEMAP_AB -> ingestToneMapAb(attemptId, verdict, events)
+            LabPath.ISP_COLOR_CORRECTION_PROBE -> ingestColorCorrectionProbe(attemptId, verdict, events)
             LabPath.SOURCE_FORMAT_PROBE -> ingestSourceProbe(attemptId, verdict, events)
             LabPath.LOG -> if (case.hfr) ingestHfrLog(attemptId, case, verdict, reason)
             else -> Unit
         }
-        save()
+        if (saveImmediately) save()
     }
 
     private fun ingestCodecLevelPair(attemptId: String, verdict: LabVerdict, events: List<JSONObject>) {
@@ -377,9 +448,22 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         updateHypothesis("H-07", status, attemptId, "ISP ToneMap A/B verdict: $label")
     }
 
+    private fun ingestColorCorrectionProbe(attemptId: String, verdict: LabVerdict, events: List<JSONObject>) {
+        val summary = events.lastOrNull { it.optString("event") == "isp_color_correction_summary" } ?: return
+        val ccModes = summary.optJSONArray("empiricalSupportedColorModes")?.let { arr ->
+            (0 until arr.length()).map { arr.optInt(it) }
+        }.orEmpty()
+        val tmModes = summary.optJSONArray("empiricalSupportedToneMapModes")?.let { arr ->
+            (0 until arr.length()).map { arr.optInt(it) }
+        }.orEmpty()
+        val inference = summary.optString("discoveryInference")
+        colorCorrectionEmpiricalVerdict = "ccModes=$ccModes, extraToneModes=$tmModes, inference=$inference"
+    }
+
     private fun ingestSourceProbe(attemptId: String, verdict: LabVerdict, events: List<JSONObject>) {
         val probe = events.lastOrNull { it.optString("event") == "source_format_probe" }
         val highPrecision = probe?.optBoolean("anyHighPrecisionSourceAdmitted", false) == true
+        val queryAbsentOnly = probe?.optBoolean("queryApiAbsentNotProofOfAbsence", false) == true
         highPrecisionSourceAdmitted = highPrecision
         if (highPrecision) {
             trueDynamicRangeVerified = false // Admission alone != DR verified until curve measured
@@ -387,10 +471,15 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         }
         val status = when {
             highPrecision -> HypothesisStatus.CONFIRMED
-            verdict == LabVerdict.OBSERVED -> HypothesisStatus.REFUTED
+            verdict == LabVerdict.OBSERVED && !queryAbsentOnly -> HypothesisStatus.REFUTED
             else -> HypothesisStatus.INCONCLUSIVE
         }
-        updateHypothesis("H-08", status, attemptId, "anyHighPrecisionSourceAdmitted=$highPrecision")
+        updateHypothesis(
+            "H-08",
+            status,
+            attemptId,
+            "anyHighPrecisionSourceAdmitted=$highPrecision, queryApiAbsentNotProofOfAbsence=$queryAbsentOnly",
+        )
     }
 
     private fun ingestHfrLog(attemptId: String, case: LabCase, verdict: LabVerdict, reason: String?) {
@@ -426,6 +515,14 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
             out.write(toJson().toString(2).toByteArray(Charsets.UTF_8))
             out.fd.sync()
             atomic.finishWrite(out)
+            val pendingNew = File(file.parentFile, "${file.name}.new")
+            if (pendingNew.isFile && System.getProperty("os.name").orEmpty().startsWith("Windows")) {
+                java.nio.file.Files.move(
+                    pendingNew.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
         } catch (t: Throwable) {
             atomic.failWrite(out)
             throw t
@@ -441,10 +538,13 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         "bestLogRecipeSummary" to bestLogRecipeSummary,
         "bestDirect4k60Summary" to bestDirect4k60Summary,
         "toneMapFlatVerdict" to toneMapFlatVerdict,
+        "colorCorrectionEmpiricalVerdict" to colorCorrectionEmpiricalVerdict,
         "highPrecisionSourceAdmitted" to highPrecisionSourceAdmitted,
         "hypotheses" to JSONArray(hypotheses.values.map { it.toJson() }),
         "learnedRecipes" to JSONArray(recipes.map { it.toJson() }),
         "contradictions" to JSONArray(contradictions.map { it.toJson() }),
+        "recordedErrors" to JSONArray(recordedErrors.map { it.toJson() }),
+        "ingestedAttempts" to JSONArray(ingestedAttempts.toList()),
     )
 
     companion object {
@@ -483,7 +583,28 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         obj.optString("bestLogRecipeSummary").takeIf { it.isNotBlank() && it != "null" }?.let { bestLogRecipeSummary = it }
         obj.optString("bestDirect4k60Summary").takeIf { it.isNotBlank() && it != "null" }?.let { bestDirect4k60Summary = it }
         obj.optString("toneMapFlatVerdict").takeIf { it.isNotBlank() && it != "null" }?.let { toneMapFlatVerdict = it }
+        obj.optString("colorCorrectionEmpiricalVerdict").takeIf { it.isNotBlank() && it != "null" }?.let {
+            colorCorrectionEmpiricalVerdict = it
+        }
         if (!obj.isNull("highPrecisionSourceAdmitted")) highPrecisionSourceAdmitted = obj.optBoolean("highPrecisionSourceAdmitted")
+
+        obj.optJSONArray("ingestedAttempts")?.let { arr ->
+            ingestedAttempts.clear()
+            for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { ingestedAttempts += it }
+        }
+        obj.optJSONArray("recordedErrors")?.let { arr ->
+            recordedErrors.clear()
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                recordedErrors += RecordedErrorEntry(
+                    scope = item.optString("scope"),
+                    attemptId = item.optString("attemptId").takeIf { it.isNotBlank() && it != "null" },
+                    errorClass = item.optString("errorClass"),
+                    message = item.optString("message").takeIf { it.isNotBlank() && it != "null" },
+                    sdkInt = item.optInt("sdkInt", 0),
+                )
+            }
+        }
 
         obj.optJSONArray("hypotheses")?.let { arr ->
             for (i in 0 until arr.length()) {

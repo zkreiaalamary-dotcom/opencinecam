@@ -145,11 +145,7 @@ internal fun sampleThermal(context: Context, evidenceRoot: File): ThermalSample 
     }.getOrNull()
     val powerManager = context.getSystemService(PowerManager::class.java)
     val thermalStatus = powerManager?.currentThermalStatus ?: 0
-    fun headroom(seconds: Int): Float? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && powerManager != null) {
-        runCatching {
-            powerManager.getThermalHeadroom(seconds).takeIf { it.isFinite() && it >= 0f }
-        }.getOrNull()
-    } else null
+    fun headroom(seconds: Int): Float? = LabApiCompat.thermalHeadroom(powerManager, seconds)
     val freeBytes = runCatching { StatFs(context.filesDir.absolutePath).availableBytes }.getOrDefault(0L)
     val evidenceBytes = runCatching {
         if (evidenceRoot.exists()) evidenceRoot.walkTopDown().filter(File::isFile).sumOf(File::length) else 0L

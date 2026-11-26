@@ -259,7 +259,7 @@ private fun downsampleCodedLuma(image: Image, targetMaxDim: Int): IntArray {
     val buf = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
     val rowStride = plane.rowStride
     val pixelStride = plane.pixelStride
-    val is16Bit = pixelStride >= 2 || image.format == ImageFormat.YCBCR_P010
+    val is16Bit = pixelStride >= 2 || image.format == LabApiCompat.FORMAT_YCBCR_P010
     val out = IntArray(sw * sh)
     for (sy in 0 until sh) {
         val y = (sy * h) / sh
@@ -284,7 +284,7 @@ private fun extractTopRightRampMetrics(image: Image): RampPrecisionMetrics {
     val buf = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
     val rowStride = plane.rowStride
     val pixelStride = plane.pixelStride
-    val is16Bit = pixelStride >= 2 || image.format == ImageFormat.YCBCR_P010
+    val is16Bit = pixelStride >= 2 || image.format == LabApiCompat.FORMAT_YCBCR_P010
     val yRow = (image.height / 4).coerceIn(0, image.height - 1)
     val xStart = image.width / 2 + 8
     val xEnd = (image.width - 8).coerceAtLeast(xStart + 1)

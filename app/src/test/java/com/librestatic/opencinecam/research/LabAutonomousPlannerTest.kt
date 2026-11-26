@@ -31,9 +31,10 @@ class LabAutonomousPlannerTest {
         val directSt = LabCase("0", LabPath.DIRECT_HEVC_SURFACETEXTURE, 3840, 2160, 60, listed = false)
         val directStLong = directSt.copy(longer = true)
         val toneAb = LabCase("0", LabPath.ISP_TONEMAP_AB, 3840, 2160, 30, listed = false)
+        val ccProbe = LabCase("0", LabPath.ISP_COLOR_CORRECTION_PROBE, 3840, 2160, 30, listed = false)
         val fmtProbe = LabCase("0", LabPath.SOURCE_FORMAT_PROBE, 3840, 2160, 30, listed = false)
 
-        val candidates = listOf(synth, log30, log30Flat, gpu30, log60, gpu60, directSt, directStLong, toneAb, fmtProbe)
+        val candidates = listOf(synth, log30, log30Flat, gpu30, log60, gpu60, directSt, directStLong, toneAb, ccProbe, fmtProbe)
         val planner = LabAutonomousPlanner(candidates, kb)
 
         val history = mutableListOf<LabResult>()
@@ -67,9 +68,11 @@ class LabAutonomousPlannerTest {
         assertEquals(directStLong, planner.next(history)?.attempt)
         history += LabResult(directStLong, LabVerdict.OBSERVED, LabStage.FILE, "a9")
 
-        // Stage E: ISP ToneMap A/B -> Source Format Probe
+        // Stage E: ISP ToneMap A/B -> ISP ColorCorrection Probe -> Source Format Probe
         assertEquals(toneAb, planner.next(history)?.attempt)
         history += LabResult(toneAb, LabVerdict.OBSERVED, LabStage.FILE, "a10")
+        assertEquals(ccProbe, planner.next(history)?.attempt)
+        history += LabResult(ccProbe, LabVerdict.OBSERVED, LabStage.FILE, "a10b")
         assertEquals(fmtProbe, planner.next(history)?.attempt)
         history += LabResult(fmtProbe, LabVerdict.OBSERVED, LabStage.FILE, "a11")
 

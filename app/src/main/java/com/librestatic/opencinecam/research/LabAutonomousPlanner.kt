@@ -94,9 +94,12 @@ internal class LabAutonomousPlanner(
             return LabDecision(directFallback, directStShortResult?.id, "Stage D (H-06): 30 s sustained single-target direct 4K60 fallback.")
         }
 
-        // Stage E: ISP ToneMap A/B & High-precision source/vendor-key probe.
+        // Stage E: ISP ToneMap A/B, ColorCorrection/Gamma empirical probe & high-precision source/vendor-key probe.
         candidates.firstOrNull { it.path == LabPath.ISP_TONEMAP_AB && it.key !in seen }?.let {
             return LabDecision(it, null, "Stage E (H-07): 4K30 YUV ISP ToneMap A/B (default vs FLAT curve).")
+        }
+        candidates.firstOrNull { it.path == LabPath.ISP_COLOR_CORRECTION_PROBE && it.key !in seen }?.let {
+            return LabDecision(it, null, "Stage E (H-07): empirical ISP colorCorrection & gamma/preset mode probe on API ${android.os.Build.VERSION.SDK_INT}.")
         }
         candidates.firstOrNull { it.path == LabPath.SOURCE_FORMAT_PROBE && it.key !in seen }?.let {
             return LabDecision(it, null, "Stage E (H-08/H-09): probe physical/logical RAW_SENSOR, RAW10, P010 & vendor keys.")
@@ -136,7 +139,7 @@ internal class LabAutonomousPlanner(
         LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K60 -> "Stage C · 4K60 LOG Escalation"
         LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
             "Stage D · Direct 4K60 Sustained"
-        LabPath.ISP_TONEMAP_AB, LabPath.SOURCE_FORMAT_PROBE -> "Stage E · ISP & Source Probe"
+        LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.SOURCE_FORMAT_PROBE -> "Stage E · ISP & Source Probe"
         LabPath.CODEC_LEVEL_PAIR -> "Stage F · Codec Level Control"
         else -> if (case.hfr) "Stage F · HFR Control" else "Stage F · Baseline"
     }

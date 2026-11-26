@@ -26,6 +26,28 @@ internal class LabJournal private constructor(val directory: File, revision: Str
             it.optInt("schemaVersion") == VERSION && it.optString("apkSourceRevision") == revision &&
             it.optString("fingerprint") == Build.FINGERPRINT } == true
 
+    /** Cross-revision resumability on the exact same device build fingerprint for unfinished runs. */
+    fun resumableOnDevice(): Boolean = !finished && readJson(header)?.let {
+        it.optInt("schemaVersion") == VERSION && it.optString("fingerprint") == Build.FINGERPRINT
+    } == true
+
+    fun recordApkRevisionTransition(newRevision: String) {
+        val current = readJson(header) ?: return
+        if (current.optString("apkSourceRevision") == newRevision &&
+            current.optString("latestApkSourceRevision") == newRevision
+        ) return
+        val history = current.optJSONArray("revisionHistory") ?: JSONArray().apply {
+            current.optString("apkSourceRevision").takeIf { it.isNotBlank() }?.let(::put)
+        }
+        if ((0 until history.length()).none { history.optString(it) == newRevision }) {
+            history.put(newRevision)
+        }
+        current.put("latestApkSourceRevision", newRevision)
+        current.put("revisionHistory", history)
+        current.put("resumedAtEpochMs", System.currentTimeMillis())
+        writeJson(header, current)
+    }
+
     init {
         check(directory.isDirectory || directory.mkdirs()) { "Cannot create research directory" }
         if (!header.exists()) writeJson(header, json(
@@ -43,19 +65,28 @@ internal class LabJournal private constructor(val directory: File, revision: Str
 
     fun attemptDirectory(id: String): File = File(directory, id)
 
+    fun readAttemptEvents(id: String): List<JSONObject> = attemptDirectory(id).listFiles().orEmpty()
+        .filter { it.isFile && it.extension == "json" && it.name.firstOrNull()?.isDigit() == true }
+        .sortedBy { it.name }
+        .mapNotNull(::readJson)
+
+    fun readResultJson(id: String): JSONObject? = readJson(File(attemptDirectory(id), "result.json"))
+
     fun telemetryFile(): File = telemetryFile
 
     fun history(): List<LabResult> = attempts().mapNotNull { folder ->
-        val start = readJson(File(folder, "000-requested.json")) ?: return@mapNotNull null
-        val saved = readJson(File(folder, "result.json"))
-        val stage = saved?.optString("stage") ?: folder.listFiles().orEmpty().sortedBy { it.name }
-            .lastOrNull { it.extension == "json" && it.name.firstOrNull()?.isDigit() == true }?.let(::readJson)?.optString("stage")
-        LabResult(
-            attempt = start.getJSONObject("case").toCase(),
-            verdict = saved?.getString("verdict")?.let(LabVerdict::valueOf) ?: LabVerdict.INTERRUPTED,
-            stage = stage?.let(LabStage::valueOf) ?: LabStage.REQUESTED,
-            id = folder.name,
-        )
+        runCatching {
+            val start = readJson(File(folder, "000-requested.json")) ?: return@mapNotNull null
+            val saved = readJson(File(folder, "result.json"))
+            val stage = saved?.optString("stage") ?: folder.listFiles().orEmpty().sortedBy { it.name }
+                .lastOrNull { it.extension == "json" && it.name.firstOrNull()?.isDigit() == true }?.let(::readJson)?.optString("stage")
+            LabResult(
+                attempt = start.getJSONObject("case").toCase(),
+                verdict = saved?.getString("verdict")?.let(LabVerdict::valueOf) ?: LabVerdict.INTERRUPTED,
+                stage = stage?.let(LabStage::valueOf) ?: LabStage.REQUESTED,
+                id = folder.name,
+            )
+        }.getOrNull()
     }
 
     fun recoverInterrupted() {
@@ -68,13 +99,15 @@ internal class LabJournal private constructor(val directory: File, revision: Str
         }
     }
 
-    fun begin(decision: LabDecision): Attempt {
+    fun begin(decision: LabDecision, apkSourceRevision: String? = null): Attempt {
         val folder = File(directory, "%03d-%s".format(java.util.Locale.ROOT, attempts().size + 1, UUID.randomUUID()))
         check(folder.mkdir()) { "Cannot create attempt directory" }
         return Attempt(folder).apply {
-            event(LabStage.REQUESTED, json(
+            val req = json(
                 "case" to decision.attempt.toJson(), "parent" to decision.parent, "hypothesis" to decision.hypothesis,
-            ))
+            )
+            apkSourceRevision?.let { req.put("apkSourceRevision", it) }
+            event(LabStage.REQUESTED, req)
         }
     }
 
@@ -195,6 +228,15 @@ private fun writeJson(file: File, value: JSONObject) {
         stream.write(value.toString(2).toByteArray(Charsets.UTF_8))
         stream.fd.sync()
         atomic.finishWrite(stream)
+        // Android's AtomicFile.renameTo cannot replace an existing file on Windows host JVM tests.
+        val pendingNew = File(file.parentFile, "${file.name}.new")
+        if (pendingNew.isFile && System.getProperty("os.name").orEmpty().startsWith("Windows")) {
+            java.nio.file.Files.move(
+                pendingNew.toPath(),
+                file.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
     } catch (error: Exception) {
         atomic.failWrite(stream)
         throw error

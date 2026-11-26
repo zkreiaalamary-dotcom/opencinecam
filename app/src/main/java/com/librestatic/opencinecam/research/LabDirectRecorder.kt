@@ -92,7 +92,7 @@ internal class LabDirectRecorder(private val context: Context, private val check
             attempt.notice(json("event" to "direct_graph", "camera" to case.camera, "cameraTargetCount" to if (twoOutputs) 2 else 1,
                 "encoder" to "MediaRecorder/HEVC", "width" to case.width, "height" to case.height,
                 "fps" to case.fps, "bitrate" to 60_000_000, "audio" to false,
-                "sessionParameters" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P),
+                "sessionParameters" to true,
                 "durationMs" to durationMs,
                 "preview" to when {
                     useImageReaderPreview -> "1280x720 PRIVATE ImageReader"
@@ -100,7 +100,7 @@ internal class LabDirectRecorder(private val context: Context, private val check
                     else -> null
                 }))
             stage("recorder_prepare")
-            val output = MediaRecorder()
+            val output = LabApiCompat.createMediaRecorder(context)
             recorder = output
             output.setOnErrorListener { _, what, extra -> fault.compareAndSet(null, "MediaRecorder error $what/$extra") }
             output.setVideoSource(MediaRecorder.VideoSource.SURFACE)
@@ -203,18 +203,24 @@ internal class LabDirectRecorder(private val context: Context, private val check
                     session.close()
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val cfg = SessionConfiguration(
+            val cfg = SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                targets.map(::OutputConfiguration),
+                Executor { handler.post(it) },
+                sessionCallback,
+            )
+            try {
+                cfg.sessionParameters = request
+                camera.createCaptureSession(cfg)
+            } catch (t: Throwable) {
+                attempt.notice(json("event" to "session_parameters_fallback", "error" to "${t.javaClass.simpleName}: ${t.message}"))
+                val plainCfg = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
                     targets.map(::OutputConfiguration),
                     Executor { handler.post(it) },
                     sessionCallback,
-                ).apply {
-                    sessionParameters = request
-                }
-                camera.createCaptureSession(cfg)
-            } else {
-                camera.createCaptureSession(targets, sessionCallback, handler)
+                )
+                camera.createCaptureSession(plainCfg)
             }
             val session = configured.get(8, TimeUnit.SECONDS)
             activeSession = session

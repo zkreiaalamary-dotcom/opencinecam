@@ -29,8 +29,8 @@ internal fun hevcProbeKeys(case: LabCase, profile: Int, level: Int?, sar: Boolea
     put(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
     put(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
     if (sar) {
-        put(MediaFormat.KEY_PIXEL_ASPECT_RATIO_WIDTH, 1)
-        put(MediaFormat.KEY_PIXEL_ASPECT_RATIO_HEIGHT, 1)
+        put(LabApiCompat.KEY_PIXEL_ASPECT_RATIO_WIDTH, 1)
+        put(LabApiCompat.KEY_PIXEL_ASPECT_RATIO_HEIGHT, 1)
     }
 }
 

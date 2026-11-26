@@ -34,6 +34,7 @@ internal object LabReportGenerator {
             "bestLogRecipeSummary" to knowledge.bestLogRecipeSummary,
             "bestDirect4k60Summary" to knowledge.bestDirect4k60Summary,
             "toneMapFlatVerdict" to knowledge.toneMapFlatVerdict,
+            "colorCorrectionEmpiricalVerdict" to knowledge.colorCorrectionEmpiricalVerdict,
             "highPrecisionSourceAdmitted" to knowledge.highPrecisionSourceAdmitted,
             "stopReason" to stopReason,
             "telemetry" to telemetryStats,
@@ -61,7 +62,11 @@ internal object LabReportGenerator {
             appendLine("- **Effective source precision:** `${knowledge.bestSourcePrecision}`")
             appendLine("- **True scene dynamic range verified:** `${knowledge.trueDynamicRangeVerified}`")
             appendLine("- **ISP ToneMap FLAT A/B verdict:** `${knowledge.toneMapFlatVerdict ?: "UNTESTED"}`")
+            appendLine("- **ISP Empirical ColorCorrection / ToneMap probe:** `${knowledge.colorCorrectionEmpiricalVerdict ?: "UNTESTED"}`")
             appendLine("- **High-precision non-YUV_420_888 source admitted:** `${knowledge.highPrecisionSourceAdmitted}`")
+            inventory?.optJSONObject("colorCorrectionDiscovery")?.let { cc ->
+                appendLine("- **ColorCorrection API discovery (`SDK ${inventory.opt("sdkInt")}`):** `${cc.optString("inferenceStatus")}`")
+            }
             appendLine()
             appendLine("## Hypothesis Ledger (H-01 .. H-10)")
             appendLine()
@@ -86,6 +91,15 @@ internal object LabReportGenerator {
                 appendLine()
                 knowledge.contradictions.forEach { c ->
                     appendLine("- **${c.topic}**: ${c.description}")
+                }
+            }
+            if (knowledge.recordedErrors.isNotEmpty()) {
+                appendLine()
+                appendLine("## Recorded Isolated Errors & Compatibility Notes")
+                appendLine()
+                knowledge.recordedErrors.forEach { e ->
+                    val att = e.attemptId?.let { " (attempt `$it`)" }.orEmpty()
+                    appendLine("- **${e.scope}**$att on SDK ${e.sdkInt}: `${e.errorClass}` — ${e.message ?: "no message"}")
                 }
             }
             appendLine()

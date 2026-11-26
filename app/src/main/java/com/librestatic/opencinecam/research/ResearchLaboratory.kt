@@ -6,6 +6,7 @@ package com.librestatic.opencinecam.research
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.os.Build
 import android.os.SystemClock
 import com.librestatic.opencinecam.camera.Camera2PreviewEngine
 import com.librestatic.opencinecam.camera.CaptureOwnerAdmission
@@ -47,8 +48,13 @@ internal class ResearchLaboratory(
             val build = if (revision == "local-unknown") {
                 "local-" + context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
             } else revision
-            val journal = latest?.takeIf { resume && !it.finished && it.compatibleWith(build) } ?: LabJournal.create(root, build)
+            val journal = latest?.takeIf {
+                resume && !it.finished && (it.compatibleWith(build) || it.resumableOnDevice())
+            } ?: LabJournal.create(root, build)
             activeJournal = journal
+            if (resume && !journal.compatibleWith(build) && journal.resumableOnDevice()) {
+                journal.recordApkRevisionTransition(build)
+            }
             journal.recoverInterrupted()
             checkBudget(forceSample = true)
             val manager = context.getSystemService(CameraManager::class.java)
@@ -65,23 +71,59 @@ internal class ResearchLaboratory(
             }
             val profiles = LabProfiles(manager, descriptor)
             val candidates = profiles.cases()
-            val inv = profiles.inventory(descriptors)
-                .put("nativeBlockPackAvailable", NativeRawCodec.available)
-                .put("apkSourceRevision", build)
-            journal.inventory(inv)
             val knowledge = LabKnowledgeBase.loadOrCreate(journal.directory)
+            val inv = try {
+                profiles.inventory(descriptors)
+                    .put("nativeBlockPackAvailable", NativeRawCodec.available)
+                    .put("apkSourceRevision", build)
+            } catch (e: VirtualMachineError) {
+                throw e
+            } catch (t: Throwable) {
+                val errMsg = "${t.javaClass.name}: ${t.message}"
+                knowledge.recordError("inventory", null, t.javaClass.name, t.message)
+                journal.appendTelemetry(json(
+                    "event" to "inventory_error",
+                    "errorClass" to t.javaClass.name,
+                    "message" to t.message?.take(400),
+                    "sdkInt" to Build.VERSION.SDK_INT,
+                ))
+                json(
+                    "selectedCamera" to descriptor.cameraId,
+                    "sdkInt" to Build.VERSION.SDK_INT,
+                    "apkSourceRevision" to build,
+                    "inventoryFatalError" to errMsg,
+                )
+            }
+            journal.inventory(inv)
             knowledge.ingestInventory(inv)
+            knowledge.syncFromPriorAttempts(journal)
             val planner = LabAutonomousPlanner(candidates, knowledge)
             val video = LabVideo(context, profiles, ::checkBudget)
             val regularLog = LabRegularLogRunner(context, descriptor, ::checkBudget)
             val sourceProbe = LabSourceProbe(context, descriptor, ::checkBudget)
-            return explore(journal, knowledge, planner, video, regularLog, sourceProbe)
+            return explore(journal, build, knowledge, planner, video, regularLog, sourceProbe)
         } catch (stop: LabStop) {
             activeJournal?.let { j ->
-                val kb = LabKnowledgeBase.loadOrCreate(j.directory)
-                LabReportGenerator.generate(j.directory, j.inventoryJson(), j.history(), kb, stop.message)
+                runCatching {
+                    val kb = LabKnowledgeBase.loadOrCreate(j.directory)
+                    LabReportGenerator.generate(j.directory, j.inventoryJson(), j.history(), kb, stop.message)
+                }
             }
             return stop.message.orEmpty()
+        } catch (e: VirtualMachineError) {
+            throw e
+        } catch (t: Throwable) {
+            val reason = "${t.javaClass.simpleName}: ${t.message ?: "Unexpected failure"}"
+            activeJournal?.let { j ->
+                runCatching {
+                    j.recordStop(reason, lastSample?.toJson())
+                    val kb = LabKnowledgeBase.loadOrCreate(j.directory)
+                    kb.recordError("run_setup", null, t.javaClass.name, t.message)
+                    kb.save()
+                    LabReportGenerator.generate(j.directory, j.inventoryJson(), j.history(), kb, reason)
+                }
+            }
+            return reason
         } finally {
             activeJournal = null
             exclusive.set(false)
@@ -90,6 +132,7 @@ internal class ResearchLaboratory(
 
     private fun explore(
         journal: LabJournal,
+        apkRevision: String,
         knowledge: LabKnowledgeBase,
         planner: LabAutonomousPlanner,
         video: LabVideo,
@@ -103,14 +146,14 @@ internal class ResearchLaboratory(
             if (nonStoppedCount >= MAX_ATTEMPTS_PER_RUN) {
                 val reason = "Experiment budget reached ($nonStoppedCount/$MAX_ATTEMPTS_PER_RUN attempts)."
                 journal.finish(reason)
-                LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason)
+                runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
                 return "$reason Evidence is ready to export."
             }
             val next = planner.next(history.filter { it.verdict != LabVerdict.STOPPED })
             if (next == null) {
                 val reason = "All admissible autonomous experiments completed."
                 journal.finish(reason)
-                LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason)
+                runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
                 return "Research complete. Evidence is ready to export."
             }
             val stageTitle = planner.stageLabel(next.attempt)
@@ -128,10 +171,14 @@ internal class ResearchLaboratory(
                     thermalStatus = sample.thermalStatus,
                 ),
             )
-            val attempt = journal.begin(next)
+            val attempt = journal.begin(next, apkRevision)
             attempt.notice(sample.toJson())
             val stopReason = execute(next.attempt, attempt, knowledge, video, regularLog, sourceProbe)
-            LabReportGenerator.generate(journal.directory, journal.inventoryJson(), journal.history(), knowledge, stopReason)
+            runCatching {
+                LabReportGenerator.generate(journal.directory, journal.inventoryJson(), journal.history(), knowledge, stopReason)
+            }.onFailure { err ->
+                journal.appendTelemetry(json("event" to "report_error", "error" to "${err.javaClass.name}: ${err.message}"))
+            }
             if (stopReason != null) return stopReason
             val until = SystemClock.elapsedRealtime() + 1_000
             while (SystemClock.elapsedRealtime() < until) {
@@ -141,7 +188,7 @@ internal class ResearchLaboratory(
         }
         val reason = "Experiment budget reached."
         journal.finish(reason)
-        LabReportGenerator.generate(journal.directory, journal.inventoryJson(), journal.history(), knowledge, reason)
+        runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), journal.history(), knowledge, reason) }
         return "Experiment budget reached. Evidence is ready to export."
     }
 
@@ -152,39 +199,21 @@ internal class ResearchLaboratory(
         video: LabVideo,
         regularLog: LabRegularLogRunner,
         sourceProbe: LabSourceProbe,
-    ): String? {
-        return try {
-            val (verdict, reason) = when (case.path) {
-                LabPath.RAW_CAMERA, LabPath.RAW_NATIVE -> runRaw(case, attempt)
-                LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
-                    LabDirectRecorder(context, ::checkBudget).run(case, attempt)
-                LabPath.CODEC_LEVEL_PAIR -> runCodecLevelPair(case, attempt, ::checkBudget)
-                LabPath.CODEC_SYNTHETIC_MATRIX -> LabSyntheticEncoderProbe.run(attempt, ::checkBudget)
-                LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60 -> {
-                    val main10 = case.path == LabPath.LOG_REGULAR_4K30 || case.path == LabPath.LOG_REGULAR_4K60
-                    val override = knowledge.bestOverrideFor(case.width, case.height, case.fps, main10 = main10)
-                    regularLog.run(case, attempt, override)
-                }
-                LabPath.ISP_TONEMAP_AB, LabPath.SOURCE_FORMAT_PROBE -> sourceProbe.run(case, attempt)
-                else -> video.run(case, attempt)
+    ): String? = executeIsolatedAttempt(attempt, case, knowledge) {
+        when (case.path) {
+            LabPath.RAW_CAMERA, LabPath.RAW_NATIVE -> runRaw(case, attempt)
+            LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
+                LabDirectRecorder(context, ::checkBudget).run(case, attempt)
+            LabPath.CODEC_LEVEL_PAIR -> runCodecLevelPair(case, attempt, ::checkBudget)
+            LabPath.CODEC_SYNTHETIC_MATRIX -> LabSyntheticEncoderProbe.run(attempt, ::checkBudget)
+            LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60 -> {
+                val main10 = case.path == LabPath.LOG_REGULAR_4K30 || case.path == LabPath.LOG_REGULAR_4K60
+                val override = knowledge.bestOverrideFor(case.width, case.height, case.fps, main10 = main10)
+                regularLog.run(case, attempt, override)
             }
-            attempt.result(verdict, reason)
-            knowledge.ingestAttempt(attempt.directory.name, case, verdict, reason, attempt.readEvents())
-            null
-        } catch (stop: LabStop) {
-            attempt.result(LabVerdict.STOPPED, stop.message)
-            stop.message
-        } catch (error: LabRetirementFailure) {
-            attempt.notice(json("error" to error.stackTraceToString().take(4096)))
-            attempt.result(LabVerdict.INTERRUPTED, error.message)
-            knowledge.ingestAttempt(attempt.directory.name, case, LabVerdict.INTERRUPTED, error.message, attempt.readEvents())
-            error.message
-        } catch (error: Exception) {
-            attempt.notice(json("error" to error.stackTraceToString().take(4096)))
-            val msg = error.message?.take(400)
-            attempt.result(LabVerdict.FAILED, msg)
-            knowledge.ingestAttempt(attempt.directory.name, case, LabVerdict.FAILED, msg, attempt.readEvents())
-            null
+            LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.SOURCE_FORMAT_PROBE ->
+                sourceProbe.run(case, attempt)
+            else -> video.run(case, attempt)
         }
     }
 
@@ -329,3 +358,43 @@ internal class ResearchLaboratory(
 }
 
 internal class LabStop(message: String) : Exception(message)
+
+internal fun executeIsolatedAttempt(
+    attempt: LabJournal.Attempt,
+    case: LabCase,
+    knowledge: LabKnowledgeBase,
+    runner: () -> Pair<LabVerdict, String?>,
+): String? = try {
+    val (verdict, reason) = runner()
+    attempt.result(verdict, reason)
+    runCatching { knowledge.ingestAttempt(attempt.directory.name, case, verdict, reason, attempt.readEvents()) }
+    null
+} catch (stop: LabStop) {
+    attempt.result(LabVerdict.STOPPED, stop.message)
+    stop.message
+} catch (error: LabRetirementFailure) {
+    attempt.notice(json(
+        "event" to "attempt_error",
+        "errorClass" to error.javaClass.name,
+        "errorMessage" to error.message?.take(400),
+        "sdkInt" to Build.VERSION.SDK_INT,
+        "stackTrace" to error.stackTraceToString().take(4096),
+    ))
+    attempt.result(LabVerdict.INTERRUPTED, error.message)
+    runCatching { knowledge.ingestAttempt(attempt.directory.name, case, LabVerdict.INTERRUPTED, error.message, attempt.readEvents()) }
+    error.message
+} catch (e: VirtualMachineError) {
+    throw e
+} catch (error: Throwable) {
+    val msg = "${error.javaClass.simpleName}: ${error.message?.take(350) ?: "no message"}"
+    attempt.notice(json(
+        "event" to "attempt_error",
+        "errorClass" to error.javaClass.name,
+        "errorMessage" to error.message?.take(400),
+        "sdkInt" to Build.VERSION.SDK_INT,
+        "stackTrace" to error.stackTraceToString().take(4096),
+    ))
+    attempt.result(LabVerdict.FAILED, msg)
+    runCatching { knowledge.ingestAttempt(attempt.directory.name, case, LabVerdict.FAILED, msg, attempt.readEvents()) }
+    null
+}

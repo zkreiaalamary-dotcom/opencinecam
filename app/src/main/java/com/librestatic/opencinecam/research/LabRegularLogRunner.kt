@@ -198,19 +198,24 @@ internal class LabRegularLogRunner(
                     session.close()
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val cfg = SessionConfiguration(
+            val cfg = SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                listOf(OutputConfiguration(cameraSurface)),
+                Executor { handler.post(it) },
+                sessionCallback,
+            )
+            try {
+                cfg.sessionParameters = initialParams
+                camera.createCaptureSession(cfg)
+            } catch (t: Throwable) {
+                attempt.notice(json("event" to "session_parameters_fallback", "error" to "${t.javaClass.simpleName}: ${t.message}"))
+                val plainCfg = SessionConfiguration(
                     SessionConfiguration.SESSION_REGULAR,
                     listOf(OutputConfiguration(cameraSurface)),
                     Executor { handler.post(it) },
                     sessionCallback,
-                ).apply {
-                    sessionParameters = initialParams
-                }
-                camera.createCaptureSession(cfg)
-            } else {
-                @Suppress("DEPRECATION")
-                camera.createCaptureSession(listOf(cameraSurface), sessionCallback, handler)
+                )
+                camera.createCaptureSession(plainCfg)
             }
 
             val session = configured.get(8, TimeUnit.SECONDS)

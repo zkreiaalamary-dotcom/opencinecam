@@ -7,7 +7,6 @@ import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.hardware.camera2.params.DynamicRangeProfiles
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaRecorder
@@ -24,13 +23,12 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
     private val id = descriptor.cameraId
     private val caps = manager.getCameraCharacteristics(id)
     private val map = requireNotNull(caps.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP))
-    private val textureSizes = map.getOutputSizes(SurfaceTexture::class.java).orEmpty().toSet()
-    private val recorderSizes = map.getOutputSizes(MediaRecorder::class.java).orEmpty().toSet()
-    private val privateSizes = map.getOutputSizes(ImageFormat.PRIVATE).orEmpty().toSet()
+    private val textureSizes = runCatching { map.getOutputSizes(SurfaceTexture::class.java).orEmpty().toSet() }.getOrDefault(emptySet())
+    private val recorderSizes = runCatching { map.getOutputSizes(MediaRecorder::class.java).orEmpty().toSet() }.getOrDefault(emptySet())
+    private val privateSizes = runCatching { map.getOutputSizes(ImageFormat.PRIVATE).orEmpty().toSet() }.getOrDefault(emptySet())
     private val rawSizes = runCatching { map.getOutputSizes(ImageFormat.RAW10).orEmpty().toList() }.getOrDefault(emptyList())
-    private val hlgAdvertised = Build.VERSION.SDK_INT >= 33 &&
-        caps.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)?.supportedProfiles
-            ?.contains(DynamicRangeProfiles.HLG10) == true
+    private val dynamicRangeDiscovery = LabApiCompat.discoverDynamicRange(caps)
+    private val hlgAdvertised = dynamicRangeDiscovery.hlg10Advertised
 
     fun cases(): List<LabCase> {
         val controls = listOf(Size(1920, 1080), Size(3840, 2160))
@@ -60,6 +58,9 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
                 add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, flatToneMap = true))
                 add(LabCase(id, LabPath.GPU_HEVC_4K30, 3840, 2160, 30, listed = false))
                 add(LabCase(id, LabPath.ISP_TONEMAP_AB, 3840, 2160, 30, listed = false))
+                add(LabCase(id, LabPath.ISP_COLOR_CORRECTION_PROBE, 3840, 2160, 30, listed = false))
+            } else if (has30 && Size(1920, 1080) in textureSizes) {
+                add(LabCase(id, LabPath.ISP_COLOR_CORRECTION_PROBE, 1920, 1080, 30, listed = false))
             }
             if (uhdInTexture && (fixed60 || descriptor.targetFpsRanges.any { 60 in it.lower..it.upper })) {
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false))
@@ -112,38 +113,75 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
 
     fun videoProfile(attempt: LabCase) = Camera2VideoProfile(Size(attempt.width, attempt.height), attempt.fps, false)
 
-    fun inventory(cameras: List<Camera2CameraDescriptor>) = json(
-        "selectedCamera" to id,
-        "hlg10Advertised" to hlgAdvertised,
-        "mediaRecorderSizes" to JSONArray(recorderSizes.map { it.toString() }.sorted()),
-        "privateOutputSizes" to JSONArray(privateSizes.map { it.toString() }.sorted()),
-        "raw10Sizes" to JSONArray(rawSizes.map { it.toString() }),
-        "surfaceTextureSizes" to JSONArray(textureSizes.map { it.toString() }.sorted()),
-        "outputFormats" to JSONArray(map.outputFormats.toList()),
-        "cameras" to JSONArray(cameras.map { camera ->
-            json("id" to camera.cameraId, "facing" to camera.lensFacing,
-                "preview" to camera.previewSize.toString(), "sensorOrientation" to camera.sensorOrientation,
-                "aeRanges" to JSONArray(camera.targetFpsRanges.map { it.toString() }),
-                "fixedFps" to JSONArray(camera.availableFixedFps),
-                "videoProfiles" to JSONArray(camera.videoProfiles.map {
-                    json("size" to it.size.toString(), "fps" to it.fps, "hfr" to it.constrainedHighSpeed)
-                }),
-                "logProfiles" to JSONArray(camera.logProfiles.map {
-                    json("size" to it.size.toString(), "fps" to it.fps, "hfr" to it.constrainedHighSpeed,
-                        "source" to it.sourcePath.name, "hdr10" to it.hdr10)
-                }),
-            )
-        }),
-        "profileGate" to if (!hlgAdvertised) "Public Camera2 HLG10 profile unavailable on this ID/API." else null,
-        "descriptorRejectionDiagnostics" to descriptorRejectionDiagnostics(),
-        "videoEncoders" to videoEncoderInventory(),
-        "physicalCameras" to physicalCameraInventory(),
-        "vendorKeys" to vendorKeyInventory(caps),
-        "toneMapModes" to JSONArray(caps.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toList().orEmpty()),
-        "maxToneMapCurvePoints" to caps.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS),
-        "colorCorrectionModes" to JSONArray(caps.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_MODES)?.toList().orEmpty()),
-        "huaweiCameraKitClassPresent" to runCatching { Class.forName("com.huawei.camera.camerakit.CameraKit") }.isSuccess,
-    )
+    fun inventory(
+        cameras: List<Camera2CameraDescriptor>,
+        sectionInjectorForTest: ((String) -> Unit)? = null,
+    ): JSONObject {
+        val errors = JSONArray()
+        fun safeSection(section: String, block: () -> Any?): Any? = try {
+            sectionInjectorForTest?.invoke(section)
+            block()
+        } catch (e: VirtualMachineError) {
+            throw e
+        } catch (t: Throwable) {
+            errors.put(json(
+                "section" to section,
+                "errorClass" to t.javaClass.name,
+                "message" to t.message?.take(300),
+                "sdkInt" to Build.VERSION.SDK_INT,
+            ))
+            null
+        }
+
+        val colorCorrection = safeSection("colorCorrectionDiscovery") {
+            LabApiCompat.discoverColorCorrection(caps)
+        } as? ColorCorrectionDiscovery
+
+        return json(
+            "selectedCamera" to id,
+            "sdkInt" to Build.VERSION.SDK_INT,
+            "hlg10Advertised" to hlgAdvertised,
+            "dynamicRangeDiscovery" to dynamicRangeDiscovery.toJson(),
+            "mediaRecorderSizes" to JSONArray(recorderSizes.map { it.toString() }.sorted()),
+            "privateOutputSizes" to JSONArray(privateSizes.map { it.toString() }.sorted()),
+            "raw10Sizes" to JSONArray(rawSizes.map { it.toString() }),
+            "surfaceTextureSizes" to JSONArray(textureSizes.map { it.toString() }.sorted()),
+            "outputFormats" to JSONArray(runCatching { map.outputFormats.toList() }.getOrDefault(emptyList())),
+            "cameras" to JSONArray(cameras.map { camera ->
+                json("id" to camera.cameraId, "facing" to camera.lensFacing,
+                    "preview" to camera.previewSize.toString(), "sensorOrientation" to camera.sensorOrientation,
+                    "aeRanges" to JSONArray(camera.targetFpsRanges.map { it.toString() }),
+                    "fixedFps" to JSONArray(camera.availableFixedFps),
+                    "videoProfiles" to JSONArray(camera.videoProfiles.map {
+                        json("size" to it.size.toString(), "fps" to it.fps, "hfr" to it.constrainedHighSpeed)
+                    }),
+                    "logProfiles" to JSONArray(camera.logProfiles.map {
+                        json("size" to it.size.toString(), "fps" to it.fps, "hfr" to it.constrainedHighSpeed,
+                            "source" to it.sourcePath.name, "hdr10" to it.hdr10)
+                    }),
+                )
+            }),
+            "profileGate" to dynamicRangeDiscovery.note,
+            "descriptorRejectionDiagnostics" to safeSection("descriptorRejectionDiagnostics") { descriptorRejectionDiagnostics() },
+            "videoEncoders" to safeSection("videoEncoders") { videoEncoderInventory() },
+            "physicalCameras" to safeSection("physicalCameras") { physicalCameraInventory() },
+            "vendorKeys" to safeSection("vendorKeys") { vendorKeyInventory(caps) },
+            "toneMapModes" to safeSection("toneMapModes") {
+                JSONArray(caps.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toList().orEmpty())
+            },
+            "maxToneMapCurvePoints" to safeSection("maxToneMapCurvePoints") {
+                caps.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS)
+            },
+            "colorCorrectionDiscovery" to colorCorrection?.toJson(),
+            "colorCorrectionModes" to JSONArray(
+                colorCorrection?.advertisedModes ?: colorCorrection?.dynamicKeyModes ?: emptyList<Int>(),
+            ),
+            "huaweiCameraKitClassPresent" to safeSection("huaweiCameraKitClassPresent") {
+                runCatching { Class.forName("com.huawei.camera.camerakit.CameraKit") }.isSuccess
+            },
+            "inventoryErrors" to errors,
+        )
+    }
 
     private fun descriptorRejectionDiagnostics(): JSONArray {
         val probeSizes = listOf(Size(1280, 720), Size(1920, 1080), Size(3840, 2160), Size(4096, 2304))
@@ -223,10 +261,11 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
 
     private fun vendorKeyInventory(characteristics: CameraCharacteristics): JSONObject {
         fun nonAndroid(names: List<String>) = JSONArray(names.filterNot { it.startsWith("android.") }.distinct().sorted())
+        val (charKeys, reqKeys, resKeys) = LabApiCompat.safeCharacteristicsKeyNames(characteristics)
         return json(
-            "characteristics" to nonAndroid(runCatching { characteristics.keys.map { it.name } }.getOrDefault(emptyList())),
-            "request" to nonAndroid(runCatching { characteristics.availableCaptureRequestKeys.map { it.name } }.getOrDefault(emptyList())),
-            "result" to nonAndroid(runCatching { characteristics.availableCaptureResultKeys.map { it.name } }.getOrDefault(emptyList())),
+            "characteristics" to nonAndroid(charKeys),
+            "request" to nonAndroid(reqKeys),
+            "result" to nonAndroid(resKeys),
             "session" to nonAndroid(runCatching { characteristics.availableSessionKeys.orEmpty().map { it.name } }.getOrDefault(emptyList())),
         )
     }
