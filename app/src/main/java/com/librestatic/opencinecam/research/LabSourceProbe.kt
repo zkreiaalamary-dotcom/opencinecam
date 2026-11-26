@@ -14,7 +14,9 @@ import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.RggbChannelVector
+import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.TonemapCurve
 import android.media.Image
 import android.media.ImageReader
@@ -30,6 +32,7 @@ import com.librestatic.opencinecam.camera.PictureProfile
 import com.librestatic.opencinecam.camera.PictureProfileCurves
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -205,11 +208,11 @@ internal class LabSourceProbe(
         val lockedIso = baselineArm?.optInt("observedIso", 0)?.takeIf { it > 0 }
         val aeModes = caps.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)?.toSet().orEmpty()
         val toneRequests = listOf(
+            Triple("GAMMA_2_6", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 2.6f),
+            Triple("GAMMA_2_4", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 2.4f),
             Triple("GAMMA_2_2", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 2.2f),
             Triple("GAMMA_2_0", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 2.0f),
             Triple("GAMMA_1_8", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.8f),
-            Triple("GAMMA_1_6", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.6f),
-            Triple("GAMMA_1_4", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.4f),
             Triple("GAMMA_1_0_LINEAR_PROBE", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.0f),
             Triple("PRESET_SRGB", CaptureRequest.TONEMAP_MODE_PRESET_CURVE, 0f),
         )
@@ -279,6 +282,9 @@ internal class LabSourceProbe(
         width: Int,
         height: Int,
         fps: Int,
+        useSessionParameters: Boolean = false,
+        companionPrivateReader: Boolean = false,
+        extraResultReader: ((TotalCaptureResult) -> Pair<String, String>?)? = null,
         configure: (CaptureRequest.Builder) -> Unit,
     ): JSONObject {
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
@@ -289,6 +295,7 @@ internal class LabSourceProbe(
         val handler = Handler(thread.looper)
         awaitCameraAvailable(manager, cameraId, handler)
         val reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 3)
+        val privateReader = if (companionPrivateReader) ImageReader.newInstance(width, height, ImageFormat.PRIVATE, 3) else null
         val opened = CompletableFuture<CameraDevice>()
         val closed = CompletableFuture<Unit>()
         val configured = CompletableFuture<CameraCaptureSession>()
@@ -300,6 +307,8 @@ internal class LabSourceProbe(
         val observedAwbLock = AtomicReference<Boolean?>()
         val observedExpNs = AtomicReference<Long?>()
         val observedIso = AtomicReference<Int?>()
+        val extraResultVal = AtomicReference<Pair<String, String>?>()
+        val privateBufInfo = AtomicReference<JSONObject?>()
         val aeLockSupported = caps?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
         val awbLockSupported = caps?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
         val captureDone = CompletableFuture<Unit>()
@@ -310,6 +319,25 @@ internal class LabSourceProbe(
                     if (samples.size < 6) {
                         samples += downsampleYPlane(img, 160)
                         if (samples.size >= 6) captureDone.complete(Unit)
+                    }
+                }
+            }
+        }, handler)
+        privateReader?.setOnImageAvailableListener({ r ->
+            runCatching {
+                r.acquireLatestImage()?.use { img ->
+                    if (privateBufInfo.get() == null) {
+                        val hb = img.hardwareBuffer
+                        privateBufInfo.compareAndSet(
+                            null,
+                            json(
+                                "imageFormat" to img.format,
+                                "hwBufferFormat" to hb?.format,
+                                "hwBufferUsage" to hb?.usage,
+                                "dataSpace" to LabApiCompat.imageDataSpace(img),
+                            ),
+                        )
+                        hb?.close()
                     }
                 }
             }
@@ -335,8 +363,19 @@ internal class LabSourceProbe(
             }, handler)
             openSubmitted = true
             val camera = opened.get(8, TimeUnit.SECONDS)
-            @Suppress("DEPRECATION")
-            camera.createCaptureSession(listOf(reader.surface), object : CameraCaptureSession.StateCallback() {
+            val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                addTarget(reader.surface)
+                privateReader?.let { addTarget(it.surface) }
+                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                if (aeLockSupported) set(CaptureRequest.CONTROL_AE_LOCK, true)
+                if (awbLockSupported) set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                configure(this)
+            }.build()
+            val outputs = buildList {
+                add(reader.surface)
+                privateReader?.let { add(it.surface) }
+            }
+            val sessionCb = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     if (retiring.get()) s.close() else configured.complete(s)
                 }
@@ -344,15 +383,31 @@ internal class LabSourceProbe(
                     configured.completeExceptionally(IllegalStateException("Configure failed"))
                     s.close()
                 }
-            }, handler)
+            }
+            if (useSessionParameters) {
+                val cfg = SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    outputs.map(::OutputConfiguration),
+                    Executor { handler.post(it) },
+                    sessionCb,
+                )
+                try {
+                    cfg.sessionParameters = req
+                    camera.createCaptureSession(cfg)
+                } catch (_: Throwable) {
+                    val plainCfg = SessionConfiguration(
+                        SessionConfiguration.SESSION_REGULAR,
+                        outputs.map(::OutputConfiguration),
+                        Executor { handler.post(it) },
+                        sessionCb,
+                    )
+                    camera.createCaptureSession(plainCfg)
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                camera.createCaptureSession(outputs, sessionCb, handler)
+            }
             session = configured.get(8, TimeUnit.SECONDS)
-            val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                addTarget(reader.surface)
-                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
-                if (aeLockSupported) set(CaptureRequest.CONTROL_AE_LOCK, true)
-                if (awbLockSupported) set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                configure(this)
-            }.build()
             session.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
                     observedCc.compareAndSet(null, res.get(CaptureResult.COLOR_CORRECTION_MODE))
@@ -361,6 +416,7 @@ internal class LabSourceProbe(
                     observedAwbLock.compareAndSet(null, res.get(CaptureResult.CONTROL_AWB_LOCK))
                     observedExpNs.compareAndSet(null, res.get(CaptureResult.SENSOR_EXPOSURE_TIME))
                     observedIso.compareAndSet(null, res.get(CaptureResult.SENSOR_SENSITIVITY))
+                    extraResultReader?.invoke(res)?.let { extraResultVal.compareAndSet(null, it) }
                 }
             }, handler)
             runCatching { captureDone.get(5, TimeUnit.SECONDS) }
@@ -380,6 +436,7 @@ internal class LabSourceProbe(
             } else closed.complete(Unit)
             runCatching { camClosed.get(8, TimeUnit.SECONDS) }
             runCatching { reader.close() }
+            runCatching { privateReader?.close() }
             thread.quitSafely()
             runCatching { thread.join(8_000) }
         }
@@ -394,6 +451,8 @@ internal class LabSourceProbe(
             "observedAwbLocked" to observedAwbLock.get(),
             "observedExposureTimeNs" to observedExpNs.get(),
             "observedIso" to observedIso.get(),
+            "privateCompanionBuffer" to privateBufInfo.get(),
+            "extraResult" to extraResultVal.get()?.let { "${it.first}:${it.second}" },
             "metrics" to metrics.toJson(),
         )
     }
@@ -422,11 +481,19 @@ internal class LabSourceProbe(
             flatToneMap = false, kirinAttenuatedCurve = true, lockedExpNs = lockedExp, lockedIso = lockedIso,
         )
         attempt.notice(json("event" to "isp_tonemap_arm", "arm" to "KIRIN_ATTENUATED_ROLLOFF", "details" to armD))
+        checkBudget()
+        val halfExp = lockedExp?.let { (it / 2L).coerceAtLeast(100_000L) }
+        val armE = captureYuvBurst(
+            case.camera, case.width, case.height, case.fps,
+            flatToneMap = false, rolloffCurve = true, lockedExpNs = halfExp, lockedIso = lockedIso,
+        )
+        attempt.notice(json("event" to "isp_tonemap_arm", "arm" to "CONTRAST_CURVE_MINUS_1EV", "details" to armE))
 
         val aMetrics = armA.opt("metricsObj") as? LumaHistogramMetrics
         val bMetrics = armB.opt("metricsObj") as? LumaHistogramMetrics
         val cMetrics = armC.opt("metricsObj") as? LumaHistogramMetrics
         val dMetrics = armD.opt("metricsObj") as? LumaHistogramMetrics
+        val eMetrics = armE.opt("metricsObj") as? LumaHistogramMetrics
         val verdictLabel = if (aMetrics != null && bMetrics != null) {
             classifyToneMapComparison(aMetrics, bMetrics, armB.optBoolean("curveAppliedAndObserved", false))
         } else "CAPTURE_FAILED"
@@ -436,21 +503,26 @@ internal class LabSourceProbe(
         val kirinLabel = if (aMetrics != null && dMetrics != null) {
             classifyToneMapComparison(aMetrics, dMetrics, armD.optBoolean("curveAppliedAndObserved", false))
         } else "CAPTURE_FAILED"
+        val minus1EvLabel = if (aMetrics != null && eMetrics != null) {
+            classifyToneMapComparison(aMetrics, eMetrics, armE.optBoolean("curveAppliedAndObserved", false))
+        } else "CAPTURE_FAILED"
         val summary = json(
             "event" to "isp_tonemap_ab_summary",
             "comparisonVerdict" to verdictLabel,
             "rolloffVerdict" to rolloffLabel,
             "kirinAttenuatedVerdict" to kirinLabel,
+            "minus1EvVerdict" to minus1EvLabel,
             "exposureLockedFromArmA" to (lockedExp != null && lockedIso != null),
             "defaultArm" to armA.optJSONObject("metricsJson"),
             "flatArm" to armB.optJSONObject("metricsJson"),
             "rolloffArm" to armC.optJSONObject("metricsJson"),
             "kirinAttenuatedArm" to armD.optJSONObject("metricsJson"),
+            "minus1EvArm" to armE.optJSONObject("metricsJson"),
             "flatObservedToneMapMode" to armB.opt("observedToneMapMode"),
         )
         attempt.event(LabStage.FILE, summary)
         return if (aMetrics != null && bMetrics != null) {
-            LabVerdict.OBSERVED to "ISP ToneMap A/B/C/D completed: flat=$verdictLabel, kirinAttenuated=$kirinLabel"
+            LabVerdict.OBSERVED to "ISP ToneMap A..E completed: flat=$verdictLabel, minus1EV=$minus1EvLabel"
         } else {
             LabVerdict.FAILED to "ISP ToneMap A/B failed to decode YUV frames."
         }
@@ -716,68 +788,111 @@ internal class LabSourceProbe(
         val cuvaReqKey = caps.availableCaptureRequestKeys.firstOrNull {
             it.name == "com.huawei.capture.metadata.cuvaStateVideoMode"
         }
+        val cuvaResKey = caps.availableCaptureResultKeys.firstOrNull {
+            it.name == "com.huawei.capture.metadata.cuvaStateVideoMode"
+        }
         val keyTypeName = runCatching {
             val nativeKey = cuvaReqKey?.javaClass?.getMethod("getNativeKey")?.invoke(cuvaReqKey)
             nativeKey?.javaClass?.getMethod("getType")?.invoke(nativeKey)?.toString()
         }.getOrNull() ?: "unknown"
 
-        val baseArm = captureConfiguredYuvProbe(case.camera, case.width, case.height, case.fps) { /* baseline */ }
+        val baseArm = captureConfiguredYuvProbe(
+            cameraId = case.camera,
+            width = case.width,
+            height = case.height,
+            fps = case.fps,
+            useSessionParameters = true,
+            companionPrivateReader = true,
+            extraResultReader = { res -> readVendorKeyResult(res, cuvaResKey) },
+        ) { /* baseline */ }
         attempt.notice(json("event" to "cuva_hdr_arm", "arm" to "DEFAULT", "details" to baseArm))
 
-        var cuvaAccepted = false
-        var cuvaError: String? = null
-        var probeArm = json("skipped" to (cuvaReqKey == null))
-        if (cuvaReqKey != null) {
+        val lockedExp = baseArm.optLong("observedExposureTimeNs", 0L).takeIf { it > 0L }
+        val lockedIso = baseArm.optInt("observedIso", 0).takeIf { it > 0 }
+        val aeModes = caps.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)?.toSet().orEmpty()
+
+        val stateResults = linkedMapOf<String, JSONObject>()
+        var chosenKeyFormat: String? = null
+        var anyAccepted = false
+        for ((armName, stateVal) in listOf("CUVA_STATE_0" to 0, "CUVA_STATE_1" to 1, "CUVA_STATE_2" to 2)) {
+            if (cuvaReqKey == null) break
             checkBudget()
             val captured = try {
-                captureConfiguredYuvProbe(case.camera, case.width, case.height, case.fps) { builder ->
-                    @Suppress("UNCHECKED_CAST")
-                    when {
-                        keyTypeName.contains("Byte", ignoreCase = true) || keyTypeName.contains("byte") ->
-                            builder.set(cuvaReqKey as CaptureRequest.Key<Byte>, 1.toByte())
-                        keyTypeName.contains("ByteArray", ignoreCase = true) || keyTypeName.contains("[B") ->
-                            builder.set(cuvaReqKey as CaptureRequest.Key<ByteArray>, byteArrayOf(1))
-                        keyTypeName.contains("IntArray", ignoreCase = true) || keyTypeName.contains("[I") ->
-                            builder.set(cuvaReqKey as CaptureRequest.Key<IntArray>, intArrayOf(1))
-                        else -> runCatching {
-                            builder.set(cuvaReqKey as CaptureRequest.Key<Int>, 1)
-                        }.onFailure {
-                            builder.set(cuvaReqKey as CaptureRequest.Key<Byte>, 1.toByte())
-                        }.getOrThrow()
+                captureConfiguredYuvProbe(
+                    cameraId = case.camera,
+                    width = case.width,
+                    height = case.height,
+                    fps = case.fps,
+                    useSessionParameters = true,
+                    companionPrivateReader = (stateVal == 1),
+                    extraResultReader = { res -> readVendorKeyResult(res, cuvaResKey) },
+                ) { builder ->
+                    if (lockedExp != null && lockedIso != null && CaptureRequest.CONTROL_AE_MODE_OFF in aeModes) {
+                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                        builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, lockedExp)
+                        builder.set(CaptureRequest.SENSOR_SENSITIVITY, lockedIso)
                     }
+                    chosenKeyFormat = setVendorByteOrIntKey(builder, cuvaReqKey, stateVal, keyTypeName)
                 }
             } catch (t: Throwable) {
-                cuvaError = "${t.javaClass.simpleName}: ${t.message?.take(240)}"
-                json("framesCaptured" to 0, "error" to cuvaError)
+                json("framesCaptured" to 0, "errorClass" to t.javaClass.name, "error" to t.message?.take(240))
             }
-            probeArm = captured
-            cuvaAccepted = captured.optInt("framesCaptured", 0) > 0 && captured.optString("error").isBlank()
+            captured.put("requestedCuvaValue", stateVal)
+            captured.put("kotlinKeyFormatUsed", chosenKeyFormat)
+            stateResults[armName] = captured
+            if (captured.optInt("framesCaptured", 0) > 0 && captured.optString("error").isBlank()) {
+                anyAccepted = true
+            }
+            attempt.notice(json("event" to "cuva_hdr_arm", "arm" to armName, "details" to captured))
         }
-        attempt.notice(json("event" to "cuva_hdr_arm", "arm" to "CUVA_STATE_1", "details" to probeArm))
 
-        // Compare Y-plane metrics baseline vs cuva=1
+        val state1Arm = stateResults["CUVA_STATE_1"] ?: stateResults.values.firstOrNull()
         val baseMean = baseArm.optJSONObject("metrics")?.optDouble("mean")
-        val cuvaMean = probeArm.optJSONObject("metrics")?.optDouble("mean")
+        val cuvaMean = state1Arm?.optJSONObject("metrics")?.optDouble("mean")
         val baseClip = baseArm.optJSONObject("metrics")?.optDouble("highlightClipFraction")
-        val cuvaClip = probeArm.optJSONObject("metrics")?.optDouble("highlightClipFraction")
+        val cuvaClip = state1Arm?.optJSONObject("metrics")?.optDouble("highlightClipFraction")
+        val basePriv = baseArm.optJSONObject("privateCompanionBuffer")
+        val cuvaPriv = state1Arm?.optJSONObject("privateCompanionBuffer")
+        val dataSpaceChanged = basePriv != null && cuvaPriv != null && (
+            basePriv.opt("hwBufferFormat") != cuvaPriv.opt("hwBufferFormat") ||
+                basePriv.opt("dataSpace") != cuvaPriv.opt("dataSpace")
+            )
+        val firstErr = state1Arm?.optString("error")?.takeIf { it.isNotBlank() }
+
         val summary = json(
             "event" to "cuva_hdr_probe_summary",
             "cuvaKeyPresent" to (cuvaReqKey != null),
-            "cuvaKeyType" to keyTypeName,
-            "cuvaAccepted" to cuvaAccepted,
-            "dataSpaceChanged" to false,
+            "cuvaKeyType" to (chosenKeyFormat ?: keyTypeName),
+            "cuvaAccepted" to anyAccepted,
+            "dataSpaceChanged" to dataSpaceChanged,
+            "baselinePrivateBuffer" to basePriv,
+            "cuva1PrivateBuffer" to cuvaPriv,
             "baselineMeanLuma" to baseMean,
             "cuvaMeanLuma" to cuvaMean,
             "baselineHighlightClip" to baseClip,
             "cuvaHighlightClip" to cuvaClip,
-            "error" to cuvaError,
+            "error" to firstErr,
         )
         attempt.event(LabStage.FILE, summary)
-        return if (cuvaReqKey == null) {
-            LabVerdict.REVIEW to "cuvaStateVideoMode key not listed on camera ${case.camera}."
-        } else {
-            LabVerdict.OBSERVED to "CUVA HDR probe: keyType=$keyTypeName, accepted=$cuvaAccepted, mean=$baseMean->$cuvaMean"
+        return when {
+            cuvaReqKey == null -> LabVerdict.REVIEW to "cuvaStateVideoMode key not listed on camera ${case.camera}."
+            anyAccepted -> LabVerdict.OBSERVED to "CUVA HDR probe ($chosenKeyFormat): accepted=true, dataSpaceChanged=$dataSpaceChanged, mean=$baseMean->$cuvaMean"
+            else -> LabVerdict.MISMATCH to "CUVA HDR probe failed across states 0/1/2: $firstErr"
         }
+    }
+
+    private fun readVendorKeyResult(res: TotalCaptureResult, key: CaptureResult.Key<*>?): Pair<String, String>? {
+        if (key == null) return null
+        val value = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            res.get(key as CaptureResult.Key<Any>)
+        }.getOrNull() ?: return null
+        val rendered = when (value) {
+            is ByteArray -> value.contentToString()
+            is IntArray -> value.contentToString()
+            else -> value.toString()
+        }
+        return key.name to rendered
     }
 
     private fun awaitCameraAvailable(manager: CameraManager, cameraId: String, handler: Handler, timeoutMs: Long = 6_000L) {
@@ -960,4 +1075,42 @@ internal fun kirinGammaAttenuatedRolloffCurve(pointsCount: Int): FloatArray? {
         out[i * 2 + 1] = y
     }
     return out
+}
+
+/**
+ * Sets a Huawei/vendor CaptureRequest.Key whose native array/scalar type is often ByteArray (`[B`)
+ * on Kirin Camera2 HAL (`Not an array: class java.lang.Byte` observed when passing scalar Byte).
+ * Tries ByteArray first unless [keyTypeHint] explicitly requests IntArray or scalar Int.
+ */
+internal fun setVendorByteOrIntKey(
+    builder: CaptureRequest.Builder,
+    key: CaptureRequest.Key<*>,
+    value: Int,
+    keyTypeHint: String = "unknown",
+): String {
+    @Suppress("UNCHECKED_CAST")
+    val attempts: List<Pair<String, () -> Unit>> = when {
+        keyTypeHint.contains("IntArray", ignoreCase = true) || keyTypeHint.contains("[I") -> listOf(
+            "IntArray" to { builder.set(key as CaptureRequest.Key<IntArray>, intArrayOf(value)) },
+            "ByteArray" to { builder.set(key as CaptureRequest.Key<ByteArray>, byteArrayOf(value.toByte())) },
+            "Int" to { builder.set(key as CaptureRequest.Key<Int>, value) },
+            "Byte" to { builder.set(key as CaptureRequest.Key<Byte>, value.toByte()) },
+        )
+        else -> listOf(
+            "ByteArray" to { builder.set(key as CaptureRequest.Key<ByteArray>, byteArrayOf(value.toByte())) },
+            "IntArray" to { builder.set(key as CaptureRequest.Key<IntArray>, intArrayOf(value)) },
+            "Byte" to { builder.set(key as CaptureRequest.Key<Byte>, value.toByte()) },
+            "Int" to { builder.set(key as CaptureRequest.Key<Int>, value) },
+        )
+    }
+    var lastError: Throwable? = null
+    for ((fmt, setter) in attempts) {
+        try {
+            setter()
+            return fmt
+        } catch (t: Throwable) {
+            lastError = t
+        }
+    }
+    throw lastError ?: IllegalArgumentException("Unable to set vendor key ${key.name}")
 }

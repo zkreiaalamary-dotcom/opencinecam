@@ -21,57 +21,128 @@ class LabSessionBudgetTest {
     @get:Rule val folder = TemporaryFolder()
 
     @Test
-    fun noTimeSliceLimitConstantOrCheckExistsOnResearchLaboratory() {
-        val fields = ResearchLaboratory.Companion::class.java.declaredFields.map { it.name } +
+    fun noTimeSliceLimitOrFixed36AttemptCapExists() {
+        val labFields = ResearchLaboratory.Companion::class.java.declaredFields.map { it.name } +
             ResearchLaboratory::class.java.declaredFields.map { it.name }
-        assertFalse("Arbitrary 5-minute time limit must be removed", fields.any { it.contains("TIME_SLICE_LIMIT") })
+        assertFalse("Arbitrary 5-minute time limit must stay removed", labFields.any { it.contains("TIME_SLICE_LIMIT") })
+        assertFalse("Arbitrary 36-attempt budget must be removed", labFields.any { it.contains("MAX_CORE_ATTEMPTS") })
+        val guardFields = LabExplorationGuard::class.java.declaredFields.map { it.name } +
+            LabExplorationGuard.Companion::class.java.declaredFields.map { it.name }
+        assertFalse("No fixed 36-experiment limit in LabExplorationGuard", guardFields.any { it.contains("MAX_CORE_ATTEMPTS") })
     }
 
     @Test
-    fun sessionBudgetSeparatesCoreFromAdaptiveFollowUpsAndBlocksDuplicateRepeatLoops() {
-        val budget = LabSessionBudget(maxCoreAttempts = 3, maxAdaptiveFollowUps = 2)
-        val c1 = LabCase("0", LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false)
-        val c2 = LabCase("0", LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false)
-        val c3 = LabCase("0", LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false)
-        val v1 = c3.copy(variant = "realtime")
-        val v2 = c3.copy(variant = "single_ctx")
-        val v3 = c3.copy(variant = "prev_30fps")
+    fun explorationGuardAllowsOverSixtyFiveUniqueExperimentsAndBlocksOnlyTrueRepeatsOrCycles() {
+        val guard = LabExplorationGuard()
+        val history = mutableListOf<LabResult>()
+        for (i in 1..65) {
+            val c = LabCase("0", LabPath.AVC, 1920, 1080, 30, variant = "unique_$i")
+            assertNull("Attempt #$i > 36 must NOT be blocked", guard.checkNext(history, c))
+            history += LabResult(c, LabVerdict.OBSERVED, LabStage.FILE, "%03d-id".format(i))
+        }
+        assertEquals(65, guard.snapshot(history).completedCount)
 
-        val history = mutableListOf(
-            LabResult(c1, LabVerdict.OBSERVED, LabStage.FILE, "001"),
-            LabResult(c2, LabVerdict.OBSERVED, LabStage.FILE, "002"),
-            LabResult(v1, LabVerdict.MISMATCH, LabStage.FILE, "003"),
-        )
-        val snap = budget.snapshot(history)
-        assertEquals(2, snap.coreExecuted)
-        assertEquals(1, snap.adaptiveExecuted)
+        // Exact already-completed key is blocked as a duplicate
+        val dupReason = guard.checkNext(history, LabCase("0", LabPath.AVC, 1920, 1080, 30, variant = "unique_1"))
+        assertNotNull(dupReason)
+        assertTrue(dupReason!!.contains("Duplicate-execution guard"))
 
-        // Repeating an already-executed non-stopped case triggers repeat guard
-        val repeatReason = budget.checkNext(history, v1)
-        assertNotNull(repeatReason)
-        assertTrue(repeatReason!!.contains("repeat guard"))
-
-        // Stopped attempts do NOT consume budget
-        history += LabResult(v2, LabVerdict.STOPPED, LabStage.RECORDER, "004")
-        assertNull(budget.checkNext(history, v2))
-
-        // Core budget and adaptive budget trigger independently at their exact caps
-        history += LabResult(c3, LabVerdict.OBSERVED, LabStage.FILE, "005")
-        history += LabResult(v2, LabVerdict.MISMATCH, LabStage.FILE, "006")
-        assertNotNull(budget.checkNext(history, LabCase("0", LabPath.GPU_HEVC_4K30, 3840, 2160, 30)))
-        assertNotNull(budget.checkNext(history, v3))
+        // Interrupted key can retry up to MAX_INTERRUPT_RETRIES_PER_KEY, then gets skipped safely
+        val intCase = LabCase("0", LabPath.LOG_REGULAR_4K60, 3840, 2160, 60)
+        assertNull(guard.checkNext(history, intCase, mapOf(intCase.key to 1)))
+        assertNull(guard.checkNext(history, intCase, mapOf(intCase.key to 2)))
+        assertNotNull(guard.checkNext(history, intCase, mapOf(intCase.key to LabExplorationGuard.MAX_INTERRUPT_RETRIES_PER_KEY)))
     }
 
     @Test
-    fun journalSavesAndReadsAtomicCheckpointAcrossResumes() {
+    fun checkpointRoundTripAndCrossRevisionResumeSkipEmptyAbortedRunsAndPreserveHistory() {
         val root = folder.newFolder()
-        val journal = LabJournal.create(root, "rev-test")
-        assertNull(journal.readCheckpoint())
-        journal.saveCheckpoint(json("state" to "RUNNING", "coreExecuted" to 5, "adaptiveExecuted" to 2))
-        val cp = journal.readCheckpoint()
-        assertNotNull(cp)
-        assertEquals("RUNNING", cp?.optString("state"))
-        assertEquals(5, cp?.optInt("coreExecuted"))
-        assertEquals(2, cp?.optInt("adaptiveExecuted"))
+        val run1 = LabJournal.create(root, "rev-1", LabPowerProfile.capture(org.robolectric.RuntimeEnvironment.getApplication()))
+        val case1 = LabCase("0", LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false)
+        val a1 = run1.begin(LabDecision(case1, null, "Stage A"))
+        a1.event(LabStage.FILE, json("fps" to 30))
+        a1.result(LabVerdict.OBSERVED)
+
+        val case2 = LabCase("0", LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false)
+        val a2 = run1.begin(LabDecision(case2, a1.directory.name, "Stage B"))
+        a2.event(LabStage.CAMERA, json("id" to "0"))
+        // Simulate abrupt app crash/reboot while a2 was inFlight!
+
+        val cp = LabCheckpointState(
+            sessionId = run1.sessionId,
+            createdEpochMs = 1_000L,
+            updatedEpochMs = 2_000L,
+            initialApkRevision = "rev-1",
+            latestApkRevision = "rev-1",
+            revisionHistory = listOf("rev-1"),
+            deviceFingerprint = android.os.Build.FINGERPRINT,
+            selectedCameraId = "0",
+            evidenceLimitBytes = 20_000_000_000L,
+            manualPowerMode = ManualPowerMode.PERFORMANCE,
+            lastAndroidPowerSaveMode = false,
+            state = LabSessionState.PAUSED_THERMAL,
+            stopReason = "Thermal pause",
+            currentStage = "Stage B",
+            inFlightAttempt = InFlightAttemptRecord(a2.directory.name, case2.toJson(), 1_500L),
+            completedKeys = listOf(case1.key),
+            failedKeys = emptyList(),
+            skippedKeys = emptyList(),
+            interruptedCounts = mapOf(case2.key to 1),
+            scheduledQueuePreview = listOf("remaining_planned=12"),
+            explorationDecisions = listOf(
+                ExplorationDecisionRecord(a1.directory.name, case1.key, null, "Stage A", "OBSERVED", "FILE", 1_200L),
+            ),
+            hypothesisStatuses = mapOf("H-02" to "CONFIRMED"),
+            powerModeHistory = emptyList(),
+        )
+        run1.saveCheckpointState(cp)
+
+        // Simulate a 0-attempt aborted run created afterward (like f8d3e998); latestResumable must STILL pick run1!
+        val emptyAbortedRun = LabJournal.create(root, "rev-1")
+        // Clear pointer to test fallback heuristic too, or point back via inspection
+        assertFalse(emptyAbortedRun.finished)
+        // latestResumable must prefer run1 (has attempts) over emptyAbortedRun (0 attempts)
+        val resumed = LabJournal.latestResumable(root)
+        assertNotNull(resumed)
+        assertEquals(run1.sessionId, resumed!!.sessionId)
+
+        // Cross-APK-revision resume works and recovers ONLY a2 as INTERRUPTED, keeping a1 OBSERVED untouched
+        assertTrue(resumed.resumableOnDevice())
+        resumed.recordApkRevisionTransition("rev-2")
+        resumed.recoverInterrupted()
+        val hist = resumed.history()
+        assertEquals(2, hist.size)
+        assertEquals(LabVerdict.OBSERVED, hist[0].verdict)
+        assertEquals(LabVerdict.INTERRUPTED, hist[1].verdict)
+
+        val reloadedCp = resumed.readCheckpointState()
+        assertNotNull(reloadedCp)
+        assertEquals(ManualPowerMode.PERFORMANCE, reloadedCp!!.manualPowerMode)
+        assertEquals(LabSessionState.PAUSED_THERMAL, reloadedCp.state)
+        assertEquals(listOf(case1.key), reloadedCp.completedKeys)
+        assertEquals(1, reloadedCp.interruptedCounts[case2.key])
+
+        // Summary reflects resumable run cleanly and explicit new run preserves old directory
+        val summary = LabJournal.inspectResumableSummary(root)
+        assertTrue(summary.hasResumableSession)
+        assertEquals(1, summary.completedCount)
+        assertEquals(1, summary.interruptedCount)
+        assertEquals(2, summary.pastSessionCount)
+
+        val run3 = LabJournal.create(root, "rev-2")
+        assertTrue(run1.directory.isDirectory)
+        assertTrue(run3.directory.isDirectory)
+        assertEquals(3, LabJournal.allRunDirectories(root).size)
+    }
+
+    @Test
+    fun manualPowerModePersistsInPreferences() {
+        val ctx = org.robolectric.RuntimeEnvironment.getApplication()
+        assertEquals(ManualPowerMode.UNSPECIFIED, LabPowerProfile.loadManualPowerMode(ctx))
+        LabPowerProfile.saveManualPowerMode(ctx, ManualPowerMode.PERFORMANCE)
+        assertEquals(ManualPowerMode.PERFORMANCE, LabPowerProfile.loadManualPowerMode(ctx))
+        val snap = LabPowerProfile.capture(ctx)
+        assertEquals(ManualPowerMode.PERFORMANCE, snap.manualPowerMode)
+        assertFalse(snap.isLikelyThrottled)
     }
 }

@@ -220,9 +220,14 @@ internal class LabRegularLogRunner(
                     if (caps.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)?.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF) == true) {
                         set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
                     }
-                } else if (case.variant == "gamma_1_8") {
+                } else if (case.variant in setOf("gamma_1_8", "gamma_2_0", "gamma_2_2")) {
+                    val gVal = when (case.variant) {
+                        "gamma_2_0" -> 2.0f
+                        "gamma_2_2" -> 2.2f
+                        else -> 1.8f
+                    }
                     set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_GAMMA_VALUE)
-                    set(CaptureRequest.TONEMAP_GAMMA, 1.8f)
+                    set(CaptureRequest.TONEMAP_GAMMA, gVal)
                     if (caps.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.contains(CaptureRequest.EDGE_MODE_OFF) == true) {
                         set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
                     }
@@ -296,13 +301,41 @@ internal class LabRegularLogRunner(
             ))
 
             if (case.previewOnly) {
-                awaitDuration(2_000) {
+                val previewWaitMs = if (case.fps >= 60) 4_000L else 2_000L
+                awaitDuration(previewWaitMs) {
                     signals.drain(attempt)
                     fault.get()?.let { error(it) }
                     checkBudget()
                 }
-                attempt.notice(signals.snapshot())
-                return LabVerdict.OBSERVED to "Regular-session GPU preview observed without encoder."
+                val snap = signals.snapshot()
+                val diag = gpu.frameDiagnosticsSnapshot()
+                attempt.notice(json(
+                    "event" to "regular_log_preview_diag",
+                    "durationMs" to previewWaitMs,
+                    "previewFramesDrained" to previewCount.get(),
+                    "frameDiagnostics" to diag?.let {
+                        json(
+                            "totalFrames" to it.totalFrames,
+                            "totalGaps" to it.totalGaps,
+                            "totalMissingFrames" to it.totalMissingFrames,
+                            "maxTotalUs" to it.maxTotalUs,
+                            "maxLatchUs" to it.maxLatchUs,
+                            "maxPreviewDrawUs" to it.maxPreviewDrawUs,
+                            "maxPreviewSwapUs" to it.maxPreviewSwapUs,
+                        )
+                    },
+                ))
+                attempt.notice(snap)
+                val camStats = snap.optJSONObject("camera")
+                val camFps = camStats?.optDouble("fps") ?: 0.0
+                val camDrops = camStats?.optInt("longIntervals") ?: 0
+                val glGaps = diag?.totalGaps ?: 0L
+                val verdict = if (camFps >= case.fps * 0.95 && camDrops == 0 && glGaps == 0L) {
+                    LabVerdict.OBSERVED
+                } else {
+                    LabVerdict.MISMATCH
+                }
+                return verdict to "Regular-session GPU preview-only (encoder idle): camFps=${"%.2f".format(java.util.Locale.ROOT, camFps)}, camDrops=$camDrops, glFrames=${diag?.totalFrames}, glGaps=$glGaps, glMissing=${diag?.totalMissingFrames}."
             }
 
             val geometry = RecordingGeometryCalculator.calculate(

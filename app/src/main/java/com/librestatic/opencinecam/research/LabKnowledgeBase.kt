@@ -351,7 +351,30 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         }
         updateHypothesis("H-02", h2Status, attemptId, "cleanMain10=${cleanMain10.size}, distortedMain10=$distortedMain10")
 
-        val maxRampBits = main10Ok.mapNotNull { it.opt("rampEffectiveBits").let { v -> v as? Number }?.toInt() }.maxOrNull()
+        val bbProbe = events.lastOrNull { it.optString("event") == "vendor_bytebuffer_10bit_probe" }
+        val bbBits = buildList {
+            bbProbe?.optJSONArray("formats")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val f = arr.optJSONObject(i) ?: continue
+                    val bits = f.opt("rampEffectiveBits").let { it as? Number }?.toInt()
+                    if (bits != null) add(f.optString("formatLabel") to bits)
+                }
+            }
+        }
+        val maxBbBits = bbBits.maxOfOrNull { it.second }
+        if (bbProbe != null) {
+            val h12Status = when {
+                (maxBbBits ?: 0) >= 9 -> HypothesisStatus.CONFIRMED
+                bbBits.isNotEmpty() -> HypothesisStatus.REFUTED
+                else -> HypothesisStatus.INCONCLUSIVE
+            }
+            updateHypothesis("H-12", h12Status, attemptId, "byteBuffer10BitFormats=$bbBits")
+        }
+
+        val maxRampBits = maxOf(
+            main10Ok.mapNotNull { it.opt("rampEffectiveBits").let { v -> v as? Number }?.toInt() }.maxOrNull() ?: 0,
+            maxBbBits ?: 0,
+        ).takeIf { main10Ok.isNotEmpty() || maxBbBits != null }
         if (maxRampBits != null) {
             bestCodedBitDepth = maxOf(bestCodedBitDepth ?: 0, 10)
             val h3Status = if (maxRampBits >= 9) HypothesisStatus.CONFIRMED else HypothesisStatus.REFUTED
@@ -369,6 +392,18 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         reason: String?,
         events: List<JSONObject>,
     ) {
+        if (case.previewOnly && case.fps >= 60) {
+            val diag = events.lastOrNull { it.optString("event") == "regular_log_preview_diag" }
+                ?.optJSONObject("frameDiagnostics")
+            val gaps = diag?.optInt("totalGaps", -1) ?: -1
+            val h11Status = when {
+                verdict == LabVerdict.OBSERVED && gaps == 0 -> HypothesisStatus.CONFIRMED
+                verdict == LabVerdict.MISMATCH || gaps > 0 -> HypothesisStatus.REFUTED
+                else -> HypothesisStatus.INCONCLUSIVE
+            }
+            updateHypothesis("H-11", h11Status, attemptId, "4K60 preview-only SurfaceTexture: verdict=${verdict.name}, glGaps=$gaps ($reason)")
+            return
+        }
         val fileEvent = events.lastOrNull { it.optString("stage") == LabStage.FILE.name && it.has("mime") }
             ?: events.lastOrNull { it.optString("stage") == LabStage.FILE.name }
         val mime = fileEvent?.optString("mime").orEmpty()
@@ -587,6 +622,8 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
             HypothesisEntry("H-08", "Public RAW_SENSOR / RAW10 / YCBCR_P010 stream is admitted on logical or physical camera"),
             HypothesisEntry("H-09", "Huawei CameraKit SDK or HDR/Log vendor keys are exposed read-only on LMR-LX9"),
             HypothesisEntry("H-10", "Constrained HFR 1080p120 OCLog2 succeeds with explicit HEVC KEY_LEVEL"),
+            HypothesisEntry("H-11", "Camera2 delivers 4K60 into SurfaceTexture without 48 fps throttling when Power Saving is OFF"),
+            HypothesisEntry("H-12", "OMX.hisi.video.encoder.hevc ByteBuffer vendor format preserves >=9-bit ramp precision"),
         )
 
         fun loadOrCreate(directory: File): LabKnowledgeBase {

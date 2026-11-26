@@ -46,33 +46,60 @@ class LabTelemetryTest {
     )
 
     @Test
-    fun singleTransientModerateDuringAttemptContinuesThenCooldownWaitsAndResumes() {
-        val policy = LabThermalPolicy(maxCooldownMs = 10_000L)
-        assertEquals(ThermalDecision.Continue(transientModerate = true), policy.evaluate(sample(elapsedMs = 1_000L, thermalStatus = 2), betweenAttempts = false))
-        assertTrue(policy.evaluate(sample(elapsedMs = 2_000L, thermalStatus = 2), betweenAttempts = false) is ThermalDecision.CooldownWait)
-        assertEquals(ThermalDecision.Continue(transientModerate = false), policy.evaluate(sample(elapsedMs = 4_000L, thermalStatus = 1), betweenAttempts = true))
-        assertTrue(policy.evaluate(sample(elapsedMs = 5_000L, thermalStatus = 2), betweenAttempts = true) is ThermalDecision.CooldownWait)
-        assertTrue(policy.evaluate(sample(elapsedMs = 15_000L, thermalStatus = 2), betweenAttempts = true) is ThermalDecision.HardStop)
+    fun thirtyTwoCelsiusWithModerateStatusContinuesWithoutThermalPause() {
+        val policy = LabThermalPolicy()
+        val s1 = sample(elapsedMs = 1_000L, thermalStatus = 2, batteryTempTenthsC = 320)
+        val s2 = sample(elapsedMs = 10_000L, thermalStatus = 2, batteryTempTenthsC = 320)
+        val s3 = sample(elapsedMs = 60_000L, thermalStatus = 2, batteryTempTenthsC = 399)
+        assertTrue(policy.evaluate(s1, betweenAttempts = false) is ThermalDecision.Continue)
+        assertTrue(policy.evaluate(s2, betweenAttempts = true) is ThermalDecision.Continue)
+        assertTrue(policy.evaluate(s3, betweenAttempts = true) is ThermalDecision.Continue)
+        assertEquals(false, policy.inThermalPause)
     }
 
     @Test
-    fun severeOrBatteryOrStorageLimitsTriggerImmediateHardStop() {
+    fun fortyCelsiusTriggersPauseAndAutoResumesOnlyAtThirtyFiveWithoutTimeoutAbort() {
         val policy = LabThermalPolicy()
-        assertTrue(policy.evaluate(sample(thermalStatus = 3)) is ThermalDecision.HardStop)
-        assertTrue(policy.evaluate(sample(batteryTempTenthsC = 450)) is ThermalDecision.HardStop)
+        assertTrue(policy.evaluate(sample(elapsedMs = 1_000L, thermalStatus = 0, batteryTempTenthsC = 400), betweenAttempts = false) is ThermalDecision.CooldownWait)
+        assertEquals(true, policy.inThermalPause)
+
+        // Even 10 minutes later at 35.1 C, must stay in CooldownWait (never aborting with a 45s timeout)
+        assertTrue(policy.evaluate(sample(elapsedMs = 300_000L, thermalStatus = 0, batteryTempTenthsC = 380), betweenAttempts = true) is ThermalDecision.CooldownWait)
+        assertTrue(policy.evaluate(sample(elapsedMs = 600_000L, thermalStatus = 0, batteryTempTenthsC = 351), betweenAttempts = true) is ThermalDecision.CooldownWait)
+
+        // Drops to 35.0 C -> auto-resumes!
+        val resumed = policy.evaluate(sample(elapsedMs = 610_000L, thermalStatus = 0, batteryTempTenthsC = 350), betweenAttempts = true)
+        assertTrue(resumed is ThermalDecision.Continue)
+        assertEquals(false, policy.inThermalPause)
+    }
+
+    @Test
+    fun dangerousOsThermalStatusPausesBelowFortyAndResumesWhenCleared() {
+        val policy = LabThermalPolicy()
+        // OS SEVERE (3) pauses even if battery is 33.0 C
+        assertTrue(policy.evaluate(sample(elapsedMs = 1_000L, thermalStatus = 3, batteryTempTenthsC = 330), betweenAttempts = true) is ThermalDecision.CooldownWait)
+        // Stays paused while still SEVERE
+        assertTrue(policy.evaluate(sample(elapsedMs = 20_000L, thermalStatus = 3, batteryTempTenthsC = 320), betweenAttempts = true) is ThermalDecision.CooldownWait)
+        // Clears once OS status < SEVERE and battery <= 35.0 C
+        assertTrue(policy.evaluate(sample(elapsedMs = 30_000L, thermalStatus = 1, batteryTempTenthsC = 320), betweenAttempts = true) is ThermalDecision.Continue)
+    }
+
+    @Test
+    fun emergencyThermalOrBatteryOrStorageLimitsTriggerResumableHardStop() {
+        val policy = LabThermalPolicy()
+        assertTrue(policy.evaluate(sample(thermalStatus = 5)) is ThermalDecision.HardStop)
         assertTrue(policy.evaluate(sample(batteryPercent = 24)) is ThermalDecision.HardStop)
         assertTrue(policy.evaluate(sample(freeBytes = LabStorageManager.DEVICE_FREE_RESERVE_BYTES - 1L)) is ThermalDecision.HardStop)
         assertTrue(policy.evaluate(sample(evidenceBytes = LabStorageManager.DEFAULT_EVIDENCE_LIMIT_BYTES)) is ThermalDecision.HardStop)
-        assertTrue(policy.evaluate(sample(thermalStatus = 2, batteryTempTenthsC = 430)) is ThermalDecision.HardStop)
     }
 
     @Test
-    fun rapidTemperatureRiseAboveFloorTriggersProactiveCooldownBeforeSevere() {
-        val policy = LabThermalPolicy(maxCooldownMs = 45_000L)
-        assertEquals(ThermalDecision.Continue(false), policy.evaluate(sample(elapsedMs = 1_000L, batteryTempTenthsC = 370), betweenAttempts = true))
-        val decision = policy.evaluate(sample(elapsedMs = 20_000L, batteryTempTenthsC = 395), betweenAttempts = true)
-        assertTrue(decision is ThermalDecision.CooldownWait)
-        assertTrue((decision as ThermalDecision.CooldownWait).reason.contains("Proactive cooldown"))
+    fun normalizesBatteryUnitsAndSysZonesCleanly() {
+        assertEquals(320, normalizeBatteryTempTenthsC(320))
+        assertEquals(320, normalizeBatteryTempTenthsC(32_000))
+        assertEquals(-1, normalizeBatteryTempTenthsC(-1))
+        assertEquals(60.0, normalizeSysZoneC(60_000), 1e-6)
+        assertEquals(38.5, normalizeSysZoneC(38_500), 1e-6)
     }
 
     @Test

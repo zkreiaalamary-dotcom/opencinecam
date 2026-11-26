@@ -119,4 +119,31 @@ class LabAutonomousPlannerTest {
         assertEquals(cuva, planner.next(history)?.attempt)
         assertNotNull(planner.stageLabel(cuva))
     }
+
+    @Test
+    fun schedules4k60PreviewOnlyDiscriminatorBeforeEncodeAndSupportsGamma20And22() {
+        val kb = LabKnowledgeBase.loadOrCreate(folder.newFolder())
+        val synth = LabCase("0", LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false)
+        val log30 = LabCase("0", LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false)
+        val gamma20 = log30.copy(variant = "gamma_2_0")
+        val gamma22 = log30.copy(variant = "gamma_2_2")
+        val log60PrevOnly = LabCase("0", LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, previewOnly = true)
+        val log60 = LabCase("0", LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false)
+
+        val candidates = listOf(synth, log30, gamma20, gamma22, log60PrevOnly, log60)
+        val planner = LabAutonomousPlanner(candidates, kb)
+        val history = mutableListOf(
+            LabResult(synth, LabVerdict.OBSERVED, LabStage.FILE, "a1"),
+            LabResult(log30, LabVerdict.OBSERVED, LabStage.FILE, "a2"),
+        )
+        assertEquals(gamma20, planner.next(history)?.attempt)
+        history += LabResult(gamma20, LabVerdict.OBSERVED, LabStage.FILE, "a3")
+        assertEquals(gamma22, planner.next(history)?.attempt)
+        history += LabResult(gamma22, LabVerdict.OBSERVED, LabStage.FILE, "a4")
+
+        assertEquals(log60PrevOnly, planner.next(history)?.attempt)
+        history += LabResult(log60PrevOnly, LabVerdict.OBSERVED, LabStage.FILE, "a5")
+        assertEquals(log60, planner.next(history)?.attempt)
+        assertEquals(1, planner.remainingPlannedCount(history))
+    }
 }

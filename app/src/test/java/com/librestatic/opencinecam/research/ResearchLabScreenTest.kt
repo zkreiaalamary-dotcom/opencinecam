@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.librestatic.opencinecam.ui.theme.AppTheme
 import com.librestatic.opencinecam.ui.theme.OpenCineCamTheme
 import org.junit.Assert.assertEquals
@@ -116,5 +117,59 @@ class ResearchLabScreenTest {
         composeRule.onNodeWithTag("lab-prune-verified").performClick()
         composeRule.onNodeWithTag("lab-prune-confirm").performClick()
         assertTrue(pruned)
+    }
+
+    @Test
+    fun powerWarningManualChipsAndResumeNewSessionConfirmationWork() {
+        var selectedMode: ManualPowerMode? = null
+        var startedNew = false
+        var resumed = false
+        composeRule.setContent {
+            OpenCineCamTheme(AppTheme.CINE) {
+                ResearchLabContent(
+                    status = "Thermal pause",
+                    running = false,
+                    exporting = false,
+                    powerProfile = PowerProfileSnapshot(
+                        epochMs = 100L,
+                        androidPowerSaveMode = true,
+                        sustainedPerformanceSupported = false,
+                        ignoringBatteryOptimizations = false,
+                        locationPowerSaveMode = 0,
+                        manualPowerMode = ManualPowerMode.POWER_SAVING,
+                    ),
+                    sessionSummary = LabSessionSummary(
+                        hasResumableSession = true,
+                        sessionId = "123-abc",
+                        state = LabSessionState.PAUSED_THERMAL,
+                        completedCount = 12,
+                        failedCount = 2,
+                        interruptedCount = 1,
+                        currentStage = "Stage D",
+                        lastStopReason = "Thermal pause",
+                        pastSessionCount = 4,
+                    ),
+                    onBack = {},
+                    onStart = { resumed = true },
+                    onNew = { startedNew = true },
+                    onStop = {},
+                    onExport = {},
+                    onSelectManualPowerMode = { selectedMode = it },
+                )
+            }
+        }
+        composeRule.onNodeWithTag("lab-power").assertIsDisplayed()
+        composeRule.onNodeWithTag("lab-power-warning").assertIsDisplayed()
+        composeRule.onNodeWithTag("lab-power-PERFORMANCE").performScrollTo().performClick()
+        assertEquals(ManualPowerMode.PERFORMANCE, selectedMode)
+
+        composeRule.onNodeWithTag("lab-session").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("lab-start").performScrollTo().performClick()
+        assertTrue(resumed)
+
+        composeRule.onNodeWithTag("lab-new").performScrollTo().performClick()
+        composeRule.onNodeWithTag("lab-new-dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("lab-new-confirm").performClick()
+        assertTrue(startedNew)
     }
 }

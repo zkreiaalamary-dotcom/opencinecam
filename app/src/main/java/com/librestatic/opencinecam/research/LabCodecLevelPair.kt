@@ -76,6 +76,40 @@ internal fun runCodecLevelPair(
             }
         }
     }
+    // Also test camera-closed 1080p120 HFR HEVC admission with explicit Main L5.0 & Main10 L6.2 levels.
+    val hfrCase = LabCase(case.camera, LabPath.LOG, 1920, 1080, 120, hfr = true, listed = true)
+    for ((profileLabel, profile, level) in listOf(
+        Triple("Main_L50", MediaCodecInfo.CodecProfileLevel.HEVCProfileMain, MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel5),
+        Triple("Main10_L62", MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10, MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel62),
+    )) {
+        checkBudget()
+        val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, 1920, 1080).apply {
+            hevcProbeKeys(hfrCase, profile, level, android.os.Build.VERSION.SDK_INT >= 30).forEach(::setInteger)
+            setInteger(MediaFormat.KEY_BIT_RATE, 80_000_000)
+        }
+        var codec: MediaCodec? = null
+        var surface: Surface? = null
+        var started = false
+        var step = "create"
+        try {
+            val encoder = MediaCodec.createByCodecName(candidate.codecName)
+            codec = encoder
+            step = "configure"
+            encoder.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            step = "input_surface"
+            surface = encoder.createInputSurface()
+            step = "start"
+            encoder.start()
+            started = true
+            attempt.notice(json("event" to "codec_hfr120_arm_result", "arm" to profileLabel, "profile" to profile, "level" to level, "admitted" to true, "step" to step))
+        } catch (error: Exception) {
+            attempt.notice(json("event" to "codec_hfr120_arm_result", "arm" to profileLabel, "profile" to profile, "level" to level, "admitted" to false, "step" to step, "failure" to error.toCodecFailure()))
+        } finally {
+            runCatching { if (started) codec?.stop() }
+            runCatching { codec?.release() }
+            runCatching { surface?.release() }
+        }
+    }
     return when (admitted) {
         2 -> LabVerdict.ADMITTED to "Both configurations started. No frames were submitted."
         1 -> LabVerdict.MISMATCH to "Only one configuration started. Compare the arm receipts."

@@ -86,6 +86,21 @@ All 24 decoded MP4s report `yuv420p`, `color_range = tv` (Limited), `color_space
 
 ---
 
+## 7. Run `f8d3e998` & `7d0db6a5` (`49` Attempts, APK `local-1795682313520`, Power Saving Confound)
+
+- **Archive:** `C:\Users\zkrei\Downloads\نتايج\جديد\OpenCineCam-research.zip` (`1,049,545,595` B, SHA-256 `ABD3A2B8EC919C5B4825B0E65336E3D500335A344EEAE4DAFA83155C4E72C466`, `4,457` entries, `15` run dirs).
+- **Run `1795682876020-f8d3e998-2a48-4266-b201-496a0bf5026a` (`0` attempts):** Aborted by `Research paused after thermal cooldown (32.0 °C, status=MODERATE).` (`batteryTempTenthsC=320`, `thermalStatus=2`, `sysZones.soc_thermal=60000`).
+- **Run `1795682997766-7d0db6a5-158a-47fc-aee9-ad3ea5334e87` (`49` attempts, `26` `OBSERVED`, `38` MP4s / `997.4 MB`, `1.05 GB`, `batt=[22.0..32.0 °C]`, ran under Huawei Power Saving ON & Performance OFF):**
+  - Stopped prematurely by `Core experiment budget reached (36/36)` (`core=36, adaptive=13`), marking `summary.json` finished prematurely.
+  - **`001` (`17` arms + `ByteBuffer`):** `Main10 L6.2 + egl8` PASSED (`4` Main10 arms incl. `dither` & `4K60`, `layout=PASS`, `bits=8`); all `egl10` (`RGBA1010102`, incl. `HLG`/`PQ`/`FP16`) emitted `0` pkts; `HISI_VENDOR_0x7F00000F` (`2130706447`) and `HISI_VENDOR_0x7F000011` (`2130706449`) BOTH **admitted (`admitted=true`)** on `Main10 L6.2`.
+  - **`002..006` 4K30 LOG/GPU:** `003` (`29.99 fps, 0d`), `004` FLAT (`29.99 fps, 0d`), `005` `gamma_1_8` (`30.00 fps, 0d`), `006` `GPU_HEVC_4K30` (`30.00 fps, 0d`) ALL `OBSERVED`.
+  - **`007..016`, `029..031` 4K60 GPU/LOG (`POWER_MODE_CONFOUNDED`):** All `13` attempts throttled to `47.80–48.30 fps` (`192–196` pkts, `46–50` drops, `11@60 -> 4/1` periodic metronome) even with GL `maxTotalUs = 14.92–15.18 ms` (`015`/`016`); must be re-tested with Power Saving OFF + `previewOnly` 4K60 control.
+  - **`017/018`, `023/024/025`, `032/033`, `037` Direct 4K60 & 1080p60 (`22–27 °C`):** ALL **`OBSERVED`** (`0` drops), including **`018` `DIRECT_HEVC_SURFACETEXTURE 720p` 30 s (`1,786` pkts, `59.93 fps`)**, **`033` `360p` 30 s (`1,784` pkts, `59.93 fps`)**, **`024` `DIRECT_HEVC` 30 s (`1,801` pkts, `59.93 fps`)**, and **`037` `AVC 1080p60` (`245` pkts, `59.92 fps`)**.
+  - **`019` & `020` Locked ISP (`20 ms`, `ISO 407`):** `GAMMA_2_2` (`max=199, 0%` clip) and `GAMMA_2_0` (`max=253, 0.056%` clip, `spread=221`) preserved highlights while `GAMMA_1_8..1_0` (`25.6%–64.8%`) and `FLAT`/`ROLLOFF`/`KIRIN_ATTENUATED` (`60.9–64.6%`) clipped.
+  - **`022` `ISP_CUVA_HDR_PROBE`:** Threw `IllegalArgumentException: Not an array: class java.lang.Byte`, isolating exact **`ByteArray` (`[B`)** requirement for `cuvaStateVideoMode`.
+
+---
+
 ## 4. Failed, Header-Only & Zero-Byte Artifacts (42 MP4 files across Runs 1–3)
 
 | Attempts | File Pattern | Bytes | Container / Failure Signature | Root Cause Summary |

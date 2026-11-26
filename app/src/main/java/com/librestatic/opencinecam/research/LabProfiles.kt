@@ -56,6 +56,8 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
             if (uhdInTexture && has30) {
                 add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, flatToneMap = true))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, variant = "gamma_2_0"))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, variant = "gamma_2_2"))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, variant = "gamma_1_8"))
                 add(LabCase(id, LabPath.GPU_HEVC_4K30, 3840, 2160, 30, listed = false))
                 add(LabCase(id, LabPath.ISP_TONEMAP_AB, 3840, 2160, 30, listed = false))
@@ -66,6 +68,7 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
                 add(LabCase(id, LabPath.ISP_CUVA_HDR_PROBE, 1920, 1080, 30, listed = false))
             }
             if (uhdInTexture && (fixed60 || descriptor.targetFpsRanges.any { 60 in it.lower..it.upper })) {
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, previewOnly = true))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "realtime"))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "single_ctx"))

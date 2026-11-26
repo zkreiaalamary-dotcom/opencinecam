@@ -26,7 +26,19 @@ class LabReportGeneratorTest {
     fun generatesMarkdownAndJsonReportPackagedIntoExportZip() {
         val root = folder.newFolder()
         val journal = LabJournal.create(root, "rev-test")
-        journal.inventory(json("selectedCamera" to "0", "hlg10Advertised" to false, "huaweiCameraKitClassPresent" to false))
+        journal.inventory(json(
+            "selectedCamera" to "0",
+            "hlg10Advertised" to false,
+            "huaweiCameraKitClassPresent" to false,
+            "powerProfile" to PowerProfileSnapshot(
+                epochMs = 1_000L,
+                androidPowerSaveMode = true,
+                sustainedPerformanceSupported = false,
+                ignoringBatteryOptimizations = false,
+                locationPowerSaveMode = 0,
+                manualPowerMode = ManualPowerMode.POWER_SAVING,
+            ).toJson(),
+        ))
         journal.appendTelemetry(json("batteryTempTenthsC" to 325, "thermalStatus" to 0, "batteryPct" to 85))
         journal.appendTelemetry(json("batteryTempTenthsC" to 362, "thermalStatus" to 1, "batteryPct" to 82))
 
@@ -51,6 +63,8 @@ class LabReportGeneratorTest {
         assertTrue(mdText.contains("CONFIRMED"))
         assertTrue(mdText.contains("36.2"))
         assertTrue(mdText.contains("POST_ISP_8BIT_SDR_DERIVED"))
+        assertTrue(mdText.contains("Power & Performance Mode Provenance"))
+        assertTrue(mdText.contains("POWER_MODE_CONFOUNDED"))
 
         val jsonReport = JSONObject(File(journal.directory, "report.json").readText(Charsets.UTF_8))
         assertEquals(1, jsonReport.getInt("observedAttempts"))

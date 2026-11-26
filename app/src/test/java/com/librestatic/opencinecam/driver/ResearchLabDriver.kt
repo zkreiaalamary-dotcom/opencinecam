@@ -29,12 +29,15 @@ fun ResearchLab() {
             progress = LabUiProgress(
                 stageLabel = "Stage B · 4K30 LOG & GPU HEVC",
                 attemptNumber = 2,
-                maxAttempts = 54,
+                completedAttempts = 1,
+                remainingPlanned = 42,
                 hypothesis = "H-04: live 4K30 regular-session OCLog2 Main10 using synthetic recipe.",
                 confirmedHypotheses = 2,
-                totalHypotheses = 10,
+                totalHypotheses = 12,
                 batteryTempC = 33.4,
                 thermalStatus = 0,
+                thermalStatusName = "NONE",
+                socTempC = 54.0,
             ).takeIf { running },
             storage = LabStorageUiState(
                 usedBytes = prunableBytes + 12_000_000L,

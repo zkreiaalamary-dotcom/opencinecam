@@ -57,12 +57,19 @@ import android.net.Uri
 internal data class LabUiProgress(
     val stageLabel: String = "",
     val attemptNumber: Int = 0,
-    val maxAttempts: Int = 54,
+    val maxAttempts: Int = 0,
+    val completedAttempts: Int = 0,
+    val remainingPlanned: Int = 0,
     val hypothesis: String? = null,
     val confirmedHypotheses: Int = 0,
-    val totalHypotheses: Int = 10,
+    val totalHypotheses: Int = 12,
     val batteryTempC: Double? = null,
     val thermalStatus: Int? = null,
+    val thermalStatusName: String? = null,
+    val inThermalPause: Boolean = false,
+    val androidPowerSaveMode: Boolean? = null,
+    val manualPowerMode: ManualPowerMode = ManualPowerMode.UNSPECIFIED,
+    val socTempC: Double? = null,
 )
 
 internal data class LabStorageUiState(
@@ -109,12 +116,15 @@ internal fun ResearchLabScreen(cameraId: String?, onBack: () -> Unit) {
         exporting = controls.exporting,
         progress = controls.progress,
         storage = controls.storage,
+        powerProfile = controls.powerProfile,
+        sessionSummary = controls.sessionSummary,
         onBack = leave,
         onStart = { controls.start(resume = true) },
         onNew = { controls.start(resume = false) },
         onStop = controls::stop,
         onExport = { export.launch("OpenCineCam-research.zip") },
         onSelectLimitBytes = controls::setLimitBytes,
+        onSelectManualPowerMode = controls::setManualPowerMode,
         onPruneVerified = controls::pruneVerified,
     )
 }
@@ -132,10 +142,14 @@ internal fun ResearchLabContent(
     onExport: () -> Unit,
     progress: LabUiProgress? = null,
     storage: LabStorageUiState? = null,
+    powerProfile: PowerProfileSnapshot? = null,
+    sessionSummary: LabSessionSummary? = null,
     onSelectLimitBytes: ((Long) -> Unit)? = null,
+    onSelectManualPowerMode: ((ManualPowerMode) -> Unit)? = null,
     onPruneVerified: (() -> Unit)? = null,
 ) {
     var confirmPruneOpen by remember { mutableStateOf(false) }
+    var confirmNewSessionOpen by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()).padding(20.dp),
@@ -155,8 +169,15 @@ internal fun ResearchLabContent(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val countLabel = if (progress.remainingPlanned > 0 || progress.completedAttempts > 0) {
+                        "${progress.completedAttempts} done · ${progress.remainingPlanned} remaining"
+                    } else if (progress.maxAttempts > 0) {
+                        "${progress.attemptNumber}/${progress.maxAttempts}"
+                    } else {
+                        "Attempt #${progress.attemptNumber}"
+                    }
                     Text(
-                        "${progress.stageLabel} (${progress.attemptNumber}/${progress.maxAttempts})",
+                        "${progress.stageLabel} ($countLabel)",
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.testTag("lab-stage"),
                     )
@@ -175,12 +196,97 @@ internal fun ResearchLabContent(
                     )
                     if (progress.batteryTempC != null || progress.thermalStatus != null) {
                         val tempStr = progress.batteryTempC?.let { "%.1f °C".format(Locale.ROOT, it) } ?: "n/a"
-                        val thermStr = progress.thermalStatus?.toString() ?: "n/a"
+                        val thermStr = progress.thermalStatusName ?: progress.thermalStatus?.toString() ?: "n/a"
+                        val socStr = progress.socTempC?.let { " · SoC %.1f °C".format(Locale.ROOT, it) }.orEmpty()
+                        val pausePolicyNote = if (progress.inThermalPause) " (paused >=40°C, auto-resumes <=35°C)" else ""
                         Text(
-                            "Battery: $tempStr · Thermal status: $thermStr",
+                            "Battery: $tempStr · OS thermal: $thermStr$socStr$pausePolicyNote",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.testTag("lab-telemetry"),
+                        )
+                    }
+                }
+            }
+        }
+        if (powerProfile != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth().testTag("lab-power"),
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val osSaveText = if (powerProfile.androidPowerSaveMode) "ON (throttled!)" else "OFF"
+                    val smartHint = powerProfile.huaweiSmartModeStatusRaw?.let { " · Huawei hint=$it" }.orEmpty()
+                    Text(
+                        "Power state · Android Power Save: $osSaveText · Logged mode: ${powerProfile.manualPowerMode.label}$smartHint",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    if (powerProfile.androidPowerSaveMode || powerProfile.isLikelyThrottled) {
+                        Text(
+                            "Warning: Power Saving Mode is active. Disable Power Saving and enable Huawei Performance Mode before running 4K60/LOG benchmarks.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("lab-power-warning"),
+                        )
+                    } else {
+                        Text(
+                            "Huawei Performance Mode cannot be toggled from public APIs; record the active device mode below for clean comparisons.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (onSelectManualPowerMode != null) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            listOf(
+                                ManualPowerMode.PERFORMANCE,
+                                ManualPowerMode.NORMAL,
+                                ManualPowerMode.POWER_SAVING,
+                                ManualPowerMode.UNSPECIFIED,
+                            ).forEach { mode ->
+                                FilterChip(
+                                    selected = powerProfile.manualPowerMode == mode,
+                                    onClick = { if (!running && !exporting) onSelectManualPowerMode(mode) },
+                                    enabled = !running && !exporting,
+                                    label = { Text(mode.label) },
+                                    modifier = Modifier.testTag("lab-power-${mode.name}"),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (sessionSummary != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth().testTag("lab-session"),
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (sessionSummary.hasResumableSession) {
+                        Text(
+                            "Saved checkpoint (${sessionSummary.state?.name ?: "PAUSED"}): " +
+                                "${sessionSummary.completedCount} completed, ${sessionSummary.failedCount} failed/mismatch, " +
+                                "${sessionSummary.interruptedCount} interrupted",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        val detail = buildString {
+                            sessionSummary.currentStage?.let { append("Stage: $it · ") }
+                            append("Total stored runs: ${sessionSummary.pastSessionCount}")
+                        }
+                        Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        sessionSummary.lastStopReason?.let { reason ->
+                            Text("Last pause: $reason", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
+                        Text(
+                            "No paused run pending (${sessionSummary.pastSessionCount} archived run(s) preserved).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -243,14 +349,52 @@ internal fun ResearchLabContent(
         if (running) {
             Button(onClick = onStop, modifier = Modifier.testTag("lab-stop")) { Text(stringResource(R.string.research_lab_stop)) }
         } else {
-            Button(onClick = onStart, enabled = !exporting, modifier = Modifier.testTag("lab-start")) {
-                Text(stringResource(R.string.research_lab_start))
+            val primaryLabel = if (sessionSummary?.hasResumableSession == true) {
+                "Resume session (${sessionSummary.completedCount} done)"
+            } else {
+                stringResource(R.string.research_lab_start)
             }
-            TextButton(onClick = onNew, enabled = !exporting) { Text(stringResource(R.string.research_lab_new)) }
+            Button(onClick = onStart, enabled = !exporting, modifier = Modifier.testTag("lab-start")) {
+                Text(primaryLabel)
+            }
+            TextButton(
+                onClick = {
+                    if (sessionSummary?.hasResumableSession == true) confirmNewSessionOpen = true else onNew()
+                },
+                enabled = !exporting,
+                modifier = Modifier.testTag("lab-new"),
+            ) {
+                Text(stringResource(R.string.research_lab_new))
+            }
             TextButton(onClick = onExport, enabled = !exporting, modifier = Modifier.testTag("lab-export")) {
                 Text(stringResource(if (exporting) R.string.research_lab_exporting else R.string.research_lab_export))
             }
         }
+    }
+    if (confirmNewSessionOpen) {
+        AlertDialog(
+            onDismissRequest = { confirmNewSessionOpen = false },
+            modifier = Modifier.testTag("lab-new-dialog"),
+            title = { Text("Start a separate new session?") },
+            text = {
+                Text(
+                    "Your current paused session (${sessionSummary?.completedCount ?: 0} completed attempts) " +
+                        "and all prior recordings will be preserved untouched, and a brand-new session folder will be started.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmNewSessionOpen = false
+                        onNew()
+                    },
+                    modifier = Modifier.testTag("lab-new-confirm"),
+                ) { Text("Start new session") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmNewSessionOpen = false }) { Text("Cancel") }
+            },
+        )
     }
     if (confirmPruneOpen && storage != null && onPruneVerified != null) {
         AlertDialog(
@@ -289,27 +433,46 @@ private class ResearchLabControls(private val context: android.content.Context, 
         private set
     var storage by mutableStateOf<LabStorageUiState?>(null)
         private set
+    var powerProfile by mutableStateOf<PowerProfileSnapshot?>(null)
+        private set
+    var sessionSummary by mutableStateOf<LabSessionSummary?>(null)
+        private set
     var running by mutableStateOf(false)
         private set
     var exporting by mutableStateOf(false)
         private set
 
     init {
-        refreshStorage()
+        refreshOverview()
     }
 
-    fun refreshStorage() {
+    fun refreshOverview() {
         worker.execute {
             val snap = loadStorageSnapshot()
-            main.post { storage = snap }
+            val pow = LabPowerProfile.capture(context)
+            val sess = LabJournal.inspectResumableSummary(ResearchLaboratory.evidenceRoot(context))
+            main.post {
+                storage = snap
+                powerProfile = pow
+                sessionSummary = sess
+            }
         }
     }
+
+    fun refreshStorage() = refreshOverview()
 
     fun setLimitBytes(limitBytes: Long) {
         if (running || exporting) return
         val saved = LabStorageManager.saveEvidenceLimitBytes(context, limitBytes)
         status = "Evidence storage limit updated to ${LabStorageManager.formatBytes(saved)}."
-        refreshStorage()
+        refreshOverview()
+    }
+
+    fun setManualPowerMode(mode: ManualPowerMode) {
+        if (running || exporting) return
+        LabPowerProfile.saveManualPowerMode(context, mode)
+        status = "Logged device power mode: ${mode.label}."
+        refreshOverview()
     }
 
     fun start(resume: Boolean) {
@@ -326,7 +489,16 @@ private class ResearchLabControls(private val context: android.content.Context, 
         worker.execute {
             val message = runCatching { run.run(resume) }.getOrElse { it.message ?: it.javaClass.simpleName }
             val snap = loadStorageSnapshot()
-            main.post { status = message; storage = snap; running = false; this.run = null }
+            val pow = LabPowerProfile.capture(context)
+            val sess = LabJournal.inspectResumableSummary(ResearchLaboratory.evidenceRoot(context))
+            main.post {
+                status = message
+                storage = snap
+                powerProfile = pow
+                sessionSummary = sess
+                running = false
+                this.run = null
+            }
         }
     }
 
@@ -345,7 +517,8 @@ private class ResearchLabControls(private val context: android.content.Context, 
                 verification.message
             }.getOrElse { it.message ?: it.javaClass.simpleName }
             val snap = loadStorageSnapshot()
-            main.post { status = message; storage = snap; exporting = false }
+            val sess = LabJournal.inspectResumableSummary(ResearchLaboratory.evidenceRoot(context))
+            main.post { status = message; storage = snap; sessionSummary = sess; exporting = false }
         }
     }
 
@@ -358,7 +531,8 @@ private class ResearchLabControls(private val context: android.content.Context, 
                 LabStorageManager.pruneVerifiedExportedMedia(root).message
             }.getOrElse { it.message ?: it.javaClass.simpleName }
             val snap = loadStorageSnapshot()
-            main.post { status = message; storage = snap; exporting = false }
+            val sess = LabJournal.inspectResumableSummary(ResearchLaboratory.evidenceRoot(context))
+            main.post { status = message; storage = snap; sessionSummary = sess; exporting = false }
         }
     }
 

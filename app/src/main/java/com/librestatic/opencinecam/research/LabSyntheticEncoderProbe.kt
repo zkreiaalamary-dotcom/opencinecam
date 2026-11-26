@@ -193,7 +193,12 @@ internal object LabSyntheticEncoderProbe {
             scratchFiles.forEach { (_, f) -> runCatching { f.delete() } }
         }
         runCatching {
-            val bbProbe = probeVendor10BitByteBufferAdmission(hevcEncoder.first, main10Level4k30)
+            val bbProbe = probeVendor10BitByteBufferAdmission(
+                codecName = hevcEncoder.first,
+                main10Level = main10Level4k30,
+                attemptDir = attempt.clip.parentFile,
+                checkBudget = checkBudget,
+            )
             attempt.notice(bbProbe)
         }
 
@@ -527,7 +532,14 @@ internal object LabSyntheticEncoderProbe {
         return if (ok && count[0] > 0) configs[0] else null
     }
 
-    private fun probeVendor10BitByteBufferAdmission(codecName: String, main10Level: Int): JSONObject {
+    private fun probeVendor10BitByteBufferAdmission(
+        codecName: String,
+        main10Level: Int,
+        attemptDir: File?,
+        checkBudget: () -> Unit,
+    ): JSONObject {
+        val w = 1920
+        val h = 1080
         val candidateFormats = listOf(
             "COLOR_FormatYUV420Flexible" to MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible,
             "HISI_VENDOR_0x7F00000F" to 0x7F00000F,
@@ -535,17 +547,23 @@ internal object LabSyntheticEncoderProbe {
         )
         val results = JSONArray()
         for ((label, colorFmt) in candidateFormats) {
+            checkBudget()
             var codec: MediaCodec? = null
+            var muxer: MediaMuxer? = null
             var started = false
+            var muxerStarted = false
+            val tempFile = attemptDir?.let { File(it, "synthetic_bb_${label.lowercase(java.util.Locale.ROOT)}.mp4") }
             val entry = json("formatLabel" to label, "colorFormat" to colorFmt, "level" to main10Level)
+            var step = "configure"
             try {
-                val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, 1920, 1080).apply {
+                val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, w, h).apply {
                     setInteger(MediaFormat.KEY_PROFILE, CodecProfileLevel.HEVCProfileMain10)
                     setInteger(MediaFormat.KEY_LEVEL, main10Level)
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFmt)
                     setInteger(MediaFormat.KEY_BIT_RATE, 20_000_000)
                     setInteger(MediaFormat.KEY_FRAME_RATE, 30)
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                    setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
                 }
                 val enc = MediaCodec.createByCodecName(codecName)
                 codec = enc
@@ -553,17 +571,189 @@ internal object LabSyntheticEncoderProbe {
                 enc.start()
                 started = true
                 entry.put("admitted", true)
-                entry.put("inputFormat", runCatching { enc.inputFormat.toString() }.getOrNull())
+                val inFmt = runCatching { enc.inputFormat }.getOrNull()
+                entry.put("inputFormat", inFmt?.toString())
+                val stride = inFmt?.let { runCatching { it.getInteger(MediaFormat.KEY_STRIDE) }.getOrNull() } ?: w
+                val sliceHeight = inFmt?.let { runCatching { it.getInteger(MediaFormat.KEY_SLICE_HEIGHT) }.getOrNull() } ?: h
+
+                if (tempFile != null) {
+                    step = "encode_ramp"
+                    muxer = MediaMuxer(tempFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                    var trackIndex = -1
+                    var encodedSamples = 0
+                    var csd0: ByteArray? = null
+                    val outInfo = MediaCodec.BufferInfo()
+                    val frameCount = 15
+                    var firstCap: Int? = null
+                    var sawFirstBpp = 0.0
+
+                    fun drain(eosMode: Boolean) {
+                        val deadlineMs = if (eosMode) 3_000L else 5L
+                        val deadline = android.os.SystemClock.elapsedRealtime() + deadlineMs
+                        while (true) {
+                            val idx = enc.dequeueOutputBuffer(outInfo, 10_000)
+                            when {
+                                idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                                    val of = enc.outputFormat
+                                    csd0 = of.getByteBuffer("csd-0")?.duplicate()?.let { b ->
+                                        ByteArray(b.remaining()).also { b.get(it) }
+                                    }
+                                    trackIndex = muxer!!.addTrack(of)
+                                    muxer!!.start()
+                                    muxerStarted = true
+                                }
+                                idx >= 0 -> {
+                                    val ob = enc.getOutputBuffer(idx)
+                                    val isCfg = (outInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+                                    if (outInfo.size > 0 && ob != null && !isCfg && muxerStarted) {
+                                        ob.position(outInfo.offset)
+                                        ob.limit(outInfo.offset + outInfo.size)
+                                        muxer!!.writeSampleData(trackIndex, ob, outInfo)
+                                        encodedSamples++
+                                    }
+                                    val eos = (outInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                                    enc.releaseOutputBuffer(idx, false)
+                                    if (eos) return
+                                }
+                                idx == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                                    if (!eosMode || android.os.SystemClock.elapsedRealtime() >= deadline) return
+                                }
+                            }
+                            if (!eosMode && android.os.SystemClock.elapsedRealtime() >= deadline) return
+                        }
+                    }
+
+                    for (fIdx in 0 until frameCount) {
+                        val inIdx = enc.dequeueInputBuffer(200_000)
+                        if (inIdx < 0) break
+                        val buf = enc.getInputBuffer(inIdx)
+                        val cap = buf?.capacity() ?: 0
+                        if (firstCap == null) {
+                            firstCap = cap
+                            sawFirstBpp = cap.toDouble() / (w.toDouble() * h.toDouble())
+                        }
+                        if (buf != null && cap > 0) {
+                            fillSyntheticByteBufferRamp(
+                                buf = buf,
+                                width = w,
+                                height = h,
+                                stride = stride.coerceAtLeast(w),
+                                sliceHeight = sliceHeight.coerceAtLeast(h),
+                                tenBit16 = sawFirstBpp >= 2.8,
+                                frameIndex = fIdx,
+                            )
+                        }
+                        val ptsUs = fIdx * 1_000_000L / 30L
+                        enc.queueInputBuffer(inIdx, 0, cap, ptsUs, 0)
+                        drain(eosMode = false)
+                    }
+                    val eosIdx = enc.dequeueInputBuffer(200_000)
+                    if (eosIdx >= 0) {
+                        enc.queueInputBuffer(eosIdx, 0, 0, frameCount * 1_000_000L / 30L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    }
+                    drain(eosMode = true)
+                    if (muxerStarted) {
+                        runCatching { muxer.stop() }
+                        muxerStarted = false
+                    }
+                    entry.put("bufferCapacityBytes", firstCap)
+                    entry.put("bytesPerPixel", sawFirstBpp)
+                    entry.put("encodedSamples", encodedSamples)
+                    entry.put("clipBytes", tempFile.length())
+                    if (encodedSamples >= 2 && tempFile.length() > 0L) {
+                        step = "inspect"
+                        val sps = csd0?.let { HevcSpsInspector.inspect(it) }
+                        val decode = inspectDecodedFrames(
+                            tempFile,
+                            listOf(frameCount / 4, frameCount / 2, (3 * frameCount) / 4).map { it * 1_000_000L / 30L },
+                            syntheticQuadrants = false,
+                        )
+                        val coded = decode.optJSONObject("codedDecode")
+                        val ramp = coded?.optJSONObject("rampPrecision")
+                        val effBits = ramp?.optInt("effectiveBitsEstimate")
+                        entry.put("spsBitDepthLuma", sps?.bitDepthLuma)
+                        entry.put("rampEffectiveBits", effBits)
+                        entry.put("mod4ZeroFraction", ramp?.optDouble("mod4ZeroFraction"))
+                        entry.put("encodedOk", true)
+                        if ((effBits ?: 0) >= 9) {
+                            entry.put("preservedClip", tempFile.name)
+                        } else {
+                            runCatching { tempFile.delete() }
+                        }
+                    } else {
+                        entry.put("encodedOk", false)
+                        runCatching { tempFile.delete() }
+                    }
+                }
             } catch (t: Throwable) {
-                entry.put("admitted", false)
-                entry.put("error", "${t.javaClass.simpleName}: ${t.message?.take(200)}")
+                entry.put("admitted", entry.optBoolean("admitted", false))
+                entry.put("encodeStep", step)
+                entry.put("error", "${t.javaClass.simpleName}: ${t.message?.take(220)}")
+                if (tempFile != null && tempFile.isFile) runCatching { tempFile.delete() }
             } finally {
+                if (muxerStarted) runCatching { muxer?.stop() }
+                runCatching { muxer?.release() }
                 if (started) runCatching { codec?.stop() }
                 runCatching { codec?.release() }
             }
             results.put(entry)
         }
         return json("event" to "vendor_bytebuffer_10bit_probe", "codec" to codecName, "formats" to results)
+    }
+
+    private fun fillSyntheticByteBufferRamp(
+        buf: ByteBuffer,
+        width: Int,
+        height: Int,
+        stride: Int,
+        sliceHeight: Int,
+        tenBit16: Boolean,
+        frameIndex: Int,
+    ) {
+        buf.clear()
+        val cap = buf.capacity()
+        val shift = (frameIndex % 4)
+        if (tenBit16) {
+            // 16-bit LE P010-style ramp (high 10 bits or LSB-shifted ramp depending on HAL expectations)
+            val totalYBytes = stride * sliceHeight * 2
+            val maxRows = minOf(height, cap / (stride * 2).coerceAtLeast(1))
+            for (y in 0 until maxRows) {
+                val rowOff = y * stride * 2
+                for (x in 0 until width) {
+                    val code10 = ((x + shift) * 1023 / (width - 1).coerceAtLeast(1)).coerceIn(0, 1023)
+                    val p010 = (code10 shl 6) and 0xFFFF
+                    val pos = rowOff + x * 2
+                    if (pos + 1 < cap) {
+                        buf.put(pos, (p010 and 0xFF).toByte())
+                        buf.put(pos + 1, ((p010 ushr 8) and 0xFF).toByte())
+                    }
+                }
+            }
+            var p = totalYBytes
+            while (p + 1 < cap) {
+                buf.put(p, 0x00)
+                buf.put(p + 1, 0x80.toByte())
+                p += 2
+            }
+        } else {
+            val totalYBytes = stride * sliceHeight
+            val maxRows = minOf(height, cap / stride.coerceAtLeast(1))
+            for (y in 0 until maxRows) {
+                val rowOff = y * stride
+                for (x in 0 until width) {
+                    val pos = rowOff + x
+                    if (pos < cap) {
+                        val code8 = (((x + shift) * 255) / (width - 1).coerceAtLeast(1)).coerceIn(0, 255)
+                        buf.put(pos, code8.toByte())
+                    }
+                }
+            }
+            for (p in totalYBytes until cap) {
+                buf.put(p, 0x80.toByte())
+            }
+        }
+        buf.position(0)
+        buf.limit(cap)
     }
 
     private fun createQuadBuffer(): FloatBuffer =

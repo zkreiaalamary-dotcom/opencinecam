@@ -21,9 +21,10 @@ internal object LabReportGenerator {
         stopReason: String? = null,
     ): File {
         val telemetryStats = summarizeTelemetry(File(journalDir, "telemetry.jsonl"))
+        val powerStats = summarizePowerModes(File(journalDir, "telemetry.jsonl"), inventory)
         val storageUsage = LabStorageManager.measureUsage(journalDir)
         val jsonReport = json(
-            "schema" to "opencinecam.research.report/v2",
+            "schema" to "opencinecam.research.report/v3",
             "selectedCamera" to inventory?.optString("selectedCamera"),
             "hlg10Advertised" to knowledge.hlg10Advertised,
             "cameraKitPresent" to knowledge.cameraKitPresent,
@@ -39,6 +40,7 @@ internal object LabReportGenerator {
             "cuvaHdrProbeVerdict" to knowledge.cuvaHdrProbeVerdict,
             "highPrecisionSourceAdmitted" to knowledge.highPrecisionSourceAdmitted,
             "stopReason" to stopReason,
+            "powerMode" to powerStats,
             "storage" to json(
                 "totalBytes" to storageUsage.totalBytes,
                 "mediaBytes" to storageUsage.mediaBytes,
@@ -65,6 +67,16 @@ internal object LabReportGenerator {
             appendLine("- **Attempts recorded:** `${history.size}` (`OBSERVED`: ${history.count { it.verdict == LabVerdict.OBSERVED }})")
             appendLine("- **Evidence storage:** `${LabStorageManager.formatBytes(storageUsage.totalBytes)}` (media `${LabStorageManager.formatBytes(storageUsage.mediaBytes)}`, logs `${LabStorageManager.formatBytes(storageUsage.metadataBytes)}`, free `${LabStorageManager.formatBytes(storageUsage.freeBytes)}`)")
             if (!stopReason.isNullOrBlank()) appendLine("- **Run state:** $stopReason")
+            appendLine()
+            appendLine("## Power & Performance Mode Provenance")
+            appendLine()
+            appendLine("- **Android Power Save Mode observed:** `${powerStats.opt("androidPowerSaveSeen")}`")
+            appendLine("- **Operator Manual Power Mode:** `${powerStats.optString("manualModes")}`")
+            appendLine("- **Huawei SmartModeStatus (raw read-only hint):** `${powerStats.opt("smartModeRaw")}`")
+            appendLine("- **CPU Governor Snapshot Readable:** `${powerStats.optBoolean("cpuFreqReadable")}`")
+            if (powerStats.optBoolean("anyThrottled")) {
+                appendLine("- **WARNING (`POWER_MODE_CONFOUNDED`):** Power Saving Mode or low-power profile was active during this session; high-FPS / encoder / GL drop results must be re-verified under Performance Mode with Power Saving OFF.")
+            }
             appendLine()
             appendLine("## Provenance & Best Verified Recipes")
             appendLine()
@@ -158,6 +170,42 @@ internal object LabReportGenerator {
             "maxBatteryTempC" to if (maxTempTenths >= 0) String.format(Locale.ROOT, "%.1f", maxTempTenths / 10.0) else null,
             "maxThermalStatus" to if (maxThermalStatus >= 0) maxThermalStatus else null,
             "lastBatteryPct" to lastBatteryPct,
+        )
+    }
+
+    private fun summarizePowerModes(telemetryFile: File, inventory: JSONObject?): JSONObject {
+        val androidSaveValues = linkedSetOf<Boolean>()
+        val manualModes = linkedSetOf<String>()
+        val smartRawValues = linkedSetOf<Int>()
+        var anyThrottled = false
+        var cpuFreqReadable = false
+
+        fun ingestPowerObj(p: JSONObject?) {
+            if (p == null) return
+            if (p.has("androidPowerSaveMode")) androidSaveValues += p.optBoolean("androidPowerSaveMode", false)
+            p.optString("manualPowerMode").takeIf { it.isNotBlank() }?.let { manualModes += it }
+            p.opt("huaweiSmartModeStatusRaw").let { it as? Number }?.toInt()?.let { smartRawValues += it }
+            if (p.optBoolean("isLikelyThrottled", false)) anyThrottled = true
+            if (p.optBoolean("cpuFreqReadable", false)) cpuFreqReadable = true
+        }
+
+        ingestPowerObj(inventory?.optJSONObject("powerProfile"))
+        if (telemetryFile.isFile) {
+            telemetryFile.forEachLine(Charsets.UTF_8) { line ->
+                if (line.isBlank()) return@forEachLine
+                runCatching {
+                    val obj = JSONObject(line)
+                    ingestPowerObj(obj.optJSONObject("powerProfile"))
+                    ingestPowerObj(obj.optJSONObject("snapshot")?.optJSONObject("powerProfile"))
+                }
+            }
+        }
+        return json(
+            "androidPowerSaveSeen" to androidSaveValues.toList().ifEmpty { listOf("unrecorded") }.joinToString(", "),
+            "manualModes" to manualModes.ifEmpty { setOf(ManualPowerMode.UNSPECIFIED.name) }.joinToString(", "),
+            "smartModeRaw" to smartRawValues.toList().ifEmpty { null }?.joinToString(", "),
+            "cpuFreqReadable" to cpuFreqReadable,
+            "anyThrottled" to anyThrottled,
         )
     }
 }

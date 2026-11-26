@@ -103,17 +103,17 @@ class LabApiCompatTest {
 
         val failingCase = LabCase("0", LabPath.SOURCE_FORMAT_PROBE, 3840, 2160, 30, listed = false)
         val attempt1 = journal.begin(LabDecision(failingCase, null, "probe broken field"), "rev-test")
-        val stopReason1 = executeIsolatedAttempt(attempt1, failingCase, kb) {
+        val outcome1 = executeIsolatedAttempt(attempt1, failingCase, kb) {
             throw NoSuchFieldError("COLOR_CORRECTION_AVAILABLE_MODES")
         }
-        assertNull(stopReason1) // Lab must continue to independent experiments!
+        assertEquals(AttemptOutcome.Completed, outcome1) // Lab must continue to independent experiments!
 
         val independentCase = LabCase("0", LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false)
         val attempt2 = journal.begin(LabDecision(independentCase, null, "independent codec probe"), "rev-test")
-        val stopReason2 = executeIsolatedAttempt(attempt2, independentCase, kb) {
+        val outcome2 = executeIsolatedAttempt(attempt2, independentCase, kb) {
             LabVerdict.OBSERVED to "Independent probe passed"
         }
-        assertNull(stopReason2)
+        assertEquals(AttemptOutcome.Completed, outcome2)
 
         val history = journal.history()
         assertEquals(listOf(LabVerdict.FAILED, LabVerdict.OBSERVED), history.map { it.verdict })

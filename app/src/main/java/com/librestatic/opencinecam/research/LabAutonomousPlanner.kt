@@ -13,18 +13,32 @@ internal class LabAutonomousPlanner(
 ) {
     private val fallbackSearch = LabSearch(candidates)
 
-    fun next(history: List<LabResult>): LabDecision? {
-        val seen = history.map { it.attempt.key }.toSet()
+    fun remainingPlannedCount(history: List<LabResult>, skippedKeys: Set<String> = emptySet()): Int {
+        val simHistory = history.toMutableList()
+        val localSkipped = skippedKeys.toMutableSet()
+        var count = 0
+        val guard = candidates.size + 64
+        while (count < guard) {
+            val step = next(simHistory, localSkipped) ?: break
+            count++
+            simHistory += LabResult(step.attempt, LabVerdict.MISMATCH, LabStage.FILE, "plan_sim_$count")
+            localSkipped += step.attempt.key
+        }
+        return count
+    }
+
+    fun next(history: List<LabResult>, skippedKeys: Set<String> = emptySet()): LabDecision? {
+        val seen = history.map { it.attempt.key }.toSet() + skippedKeys
 
         // 0. Bound to 1 retry on inconclusive/borderline/interrupted prioritized probes to verify reproducibility or catch contradictions.
         findPendingRetry(history, seen)?.let { return it }
 
-        // Stage A: Camera-closed synthetic HEVC Main8/Main10 matrix (isolates configure, geometry, 10-bit ramp).
+        // Stage A: Camera-closed synthetic HEVC Main8/Main10 + ByteBuffer 10-bit probe.
         candidates.firstOrNull { it.path == LabPath.CODEC_SYNTHETIC_MATRIX && it.key !in seen }?.let {
-            return LabDecision(it, null, "Stage A (H-02/H-03): synthetic EGL Main8/Main10 encoder, geometry & 10-bit ramp isolation.")
+            return LabDecision(it, null, "Stage A (H-02/H-03/H-12): synthetic EGL Main8/Main10 encoder, geometry & 10-bit ramp/ByteBuffer isolation.")
         }
 
-        // Stage B: 4K30 regular-session OCLog2 (default & FLAT tone map) + GPU HEVC control.
+        // Stage B: 4K30 regular-session OCLog2 (default, calibrated gamma 2.0/2.2/1.8, FLAT) + GPU HEVC control.
         val log4k30 = candidates.firstOrNull {
             it.path == LabPath.LOG_REGULAR_4K30 && !it.flatToneMap && !it.longer && !it.previewOnly && it.variant.isBlank()
         }
@@ -33,15 +47,21 @@ internal class LabAutonomousPlanner(
         }
         val log4k30Result = history.lastOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K30 && !it.attempt.flatToneMap && !it.attempt.longer && it.attempt.variant.isBlank() }
         if (log4k30Result?.verdict == LabVerdict.OBSERVED) {
+            for ((variantKey, hyp) in listOf(
+                "gamma_2_0" to "Stage B (H-04/H-07): 4K30 OCLog2 with TONEMAP_MODE_GAMMA_VALUE=2.0 unclipped headroom.",
+                "gamma_2_2" to "Stage B (H-04/H-07): 4K30 OCLog2 with TONEMAP_MODE_GAMMA_VALUE=2.2 highlight reference.",
+                "gamma_1_8" to "Stage B (H-04/H-07): 4K30 OCLog2 with TONEMAP_MODE_GAMMA_VALUE=1.8 midtone test.",
+            )) {
+                candidates.firstOrNull {
+                    it.path == LabPath.LOG_REGULAR_4K30 && !it.flatToneMap && !it.longer && !it.previewOnly && it.variant == variantKey && it.key !in seen
+                }?.let { gammaCase ->
+                    return LabDecision(gammaCase, log4k30Result.id, hyp)
+                }
+            }
             candidates.firstOrNull {
                 it.path == LabPath.LOG_REGULAR_4K30 && it.flatToneMap && !it.longer && !it.previewOnly && it.variant.isBlank() && it.key !in seen
             }?.let { flatCase ->
                 return LabDecision(flatCase, log4k30Result.id, "Stage B (H-04/H-07): 4K30 OCLog2 with TONEMAP_MODE_CONTRAST_CURVE FLAT.")
-            }
-            candidates.firstOrNull {
-                it.path == LabPath.LOG_REGULAR_4K30 && !it.flatToneMap && !it.longer && !it.previewOnly && it.variant == "gamma_1_8" && it.key !in seen
-            }?.let { gammaCase ->
-                return LabDecision(gammaCase, log4k30Result.id, "Stage B (H-04/H-07): 4K30 OCLog2 with TONEMAP_MODE_GAMMA_VALUE=1.8 highlight headroom.")
             }
         }
         candidates.firstOrNull {
@@ -50,7 +70,7 @@ internal class LabAutonomousPlanner(
             return LabDecision(gpu30, log4k30Result?.id, "Stage B: regular-session 4K30 GPU HEVC Main8 control.")
         }
 
-        // Stage C: Escalate to 4K60 OCLog2 & 4K60 GPU HEVC if 4K30 or synthetic 4K60 succeeded.
+        // Stage C: Escalate to 4K60 SurfaceTexture drain-only check, 4K60 OCLog2 & 4K60 GPU HEVC.
         val log30Ok = history.any { it.attempt.path == LabPath.LOG_REGULAR_4K30 && it.verdict == LabVerdict.OBSERVED }
         val gpu30Ok = history.any { it.attempt.path == LabPath.GPU_HEVC_4K30 && it.verdict == LabVerdict.OBSERVED }
         val synth60Main10Ok = knowledge.recipes.any {
@@ -59,15 +79,22 @@ internal class LabAutonomousPlanner(
         val synth60AnyOk = knowledge.recipes.any { it.fps >= 60 }
         if (log30Ok || synth60Main10Ok) {
             candidates.firstOrNull {
+                it.path == LabPath.LOG_REGULAR_4K60 && it.previewOnly && !it.longer && it.variant.isBlank() && it.key !in seen
+            }?.let { previewOnly60 ->
+                return LabDecision(previewOnly60, log4k30Result?.id, "Stage C (H-11): 4K60 Camera2->SurfaceTexture drain-only control (encoder idle) to isolate 48 fps metronome.")
+            }
+            candidates.firstOrNull {
                 it.path == LabPath.LOG_REGULAR_4K60 && !it.longer && !it.previewOnly && it.variant.isBlank() && it.key !in seen
             }?.let { log60 ->
                 return LabDecision(log60, log4k30Result?.id, "Stage C (H-05): escalate 4K30 success to 4K60 regular-session OCLog2.")
             }
         }
         val log60BaseResult = history.lastOrNull {
-            it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && it.attempt.variant.isBlank()
+            it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && !it.attempt.previewOnly && it.attempt.variant.isBlank()
         }
-        val log60AnyObserved = history.firstOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && it.verdict == LabVerdict.OBSERVED }
+        val log60AnyObserved = history.firstOrNull {
+            it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && !it.attempt.previewOnly && it.verdict == LabVerdict.OBSERVED
+        }
         if (log60BaseResult != null && log60BaseResult.verdict != LabVerdict.OBSERVED && log60AnyObserved == null) {
             for ((variantKey, hypDesc) in listOf(
                 "realtime" to "Stage C (H-05): enable KEY_PRIORITY=0 & KEY_OPERATING_RATE=60 on 4K60 OCLog2.",
@@ -85,7 +112,7 @@ internal class LabAutonomousPlanner(
                 }
             }
         }
-        val log60Result = history.lastOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer }
+        val log60Result = history.lastOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && !it.attempt.previewOnly }
         if (log60AnyObserved != null) {
             val longLog60 = log60AnyObserved.attempt.copy(longer = true, retryIndex = 0)
             if (longLog60.key !in seen) {
@@ -116,7 +143,7 @@ internal class LabAutonomousPlanner(
             }
         }
 
-        // Stage D: Sustained direct 4K60 HEVC + live SurfaceTexture preview (720p & 360p fallback/comparison).
+        // Stage D: Sustained direct 4K60 HEVC + live SurfaceTexture preview (720p & 360p reference + single-target control).
         val directStShort = candidates.firstOrNull {
             it.path == LabPath.DIRECT_HEVC_SURFACETEXTURE && !it.longer && !it.previewOnly
         }
@@ -151,22 +178,34 @@ internal class LabAutonomousPlanner(
             return LabDecision(directFallback, directStShortResult?.id, "Stage D (H-06): 30 s sustained single-target direct 4K60 fallback.")
         }
 
-        // Stage E: ISP ToneMap A/B, ColorCorrection/Gamma empirical probe & high-precision source/vendor-key probe.
+        // Stage E: ISP ToneMap A..E, ColorCorrection/Gamma sweep, Source Format Probe, and CUVA HDR Vivid Probe.
         candidates.firstOrNull { it.path == LabPath.ISP_TONEMAP_AB && it.key !in seen }?.let {
-            return LabDecision(it, null, "Stage E (H-07): 4K30 YUV ISP ToneMap A/B (default vs FLAT curve).")
+            return LabDecision(it, null, "Stage E (H-07): 4K30 YUV ISP ToneMap A..E (default, FLAT, rolloffs, -1 EV).")
         }
         candidates.firstOrNull { it.path == LabPath.ISP_COLOR_CORRECTION_PROBE && it.key !in seen }?.let {
-            return LabDecision(it, null, "Stage E (H-07): empirical ISP colorCorrection & gamma/preset mode probe on API ${android.os.Build.VERSION.SDK_INT}.")
+            return LabDecision(it, null, "Stage E (H-07): empirical ISP colorCorrection & gamma 2.6..1.0 sweep on API ${android.os.Build.VERSION.SDK_INT}.")
         }
         candidates.firstOrNull { it.path == LabPath.SOURCE_FORMAT_PROBE && it.key !in seen }?.let {
             return LabDecision(it, null, "Stage E (H-08/H-09): probe physical/logical RAW_SENSOR, RAW10, P010 & vendor keys.")
         }
         candidates.firstOrNull { it.path == LabPath.ISP_CUVA_HDR_PROBE && it.key !in seen }?.let {
-            return LabDecision(it, null, "Stage E (H-09): probe com.huawei.capture.metadata.cuvaStateVideoMode HDR Vivid control & DataSpace.")
+            return LabDecision(it, null, "Stage E (H-09): probe com.huawei.capture.metadata.cuvaStateVideoMode ByteArray states 0/1/2 & HDR buffers.")
         }
 
-        // Stage F: Delegate remaining codec level pair, RAW, HFR 1080p120, and AVC baselines to LabSearch.
-        return fallbackSearch.next(history)
+        // Stage F: Tiered historical audit — run codec level pair, HFR, RAW, primary AVC/HEVC controls without redundant HEVC missing-level spam.
+        val redundantPathsToPrune = buildSet<String> {
+            candidates.forEach { candidate ->
+                val isRedundantMissingLevelHevc = candidate.path == LabPath.HEVC &&
+                    (candidate.previewOnly || candidate.longer || candidate.width < 3840 || candidate.fps != 30)
+                val isRedundantPreviewOnlyDuplicate = candidate.path == LabPath.AVC && candidate.previewOnly && candidate.fps < 60
+                val isRedundantLongerSmall = candidate.longer && candidate.path == LabPath.AVC && candidate.width < 3840 && candidate.fps != 60
+                if (isRedundantMissingLevelHevc || isRedundantPreviewOnlyDuplicate || isRedundantLongerSmall) add(candidate.key)
+            }
+        }
+        val filteredHistory = history + (skippedKeys + redundantPathsToPrune).mapNotNull { key ->
+            candidates.firstOrNull { it.key == key }?.let { LabResult(it, LabVerdict.STOPPED, LabStage.REQUESTED, "pruned") }
+        }
+        return fallbackSearch.next(filteredHistory)
     }
 
     private fun findPendingRetry(history: List<LabResult>, seen: Set<String>): LabDecision? {

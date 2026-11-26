@@ -31,17 +31,23 @@ internal data class ThermalSample(
     val evidenceBytes: Long,
     val sysZones: Map<String, Int> = emptyMap(),
     val evidenceLimitBytes: Long = LabStorageManager.DEFAULT_EVIDENCE_LIMIT_BYTES,
+    val batteryTempRaw: Int = batteryTempTenthsC,
+    val powerProfile: PowerProfileSnapshot? = null,
 ) {
     fun toJson(): JSONObject = json(
         "event" to "telemetry",
         "elapsedMs" to elapsedMs,
         "epochMs" to epochMs,
         "thermalStatus" to thermalStatus,
+        "thermalStatusName" to thermalStatusLabel(thermalStatus),
         "headroom0s" to headroom0s?.toDouble(),
         "headroom10s" to headroom10s?.toDouble(),
         "headroom30s" to headroom30s?.toDouble(),
         "batteryPercent" to batteryPercent,
+        "batteryTempSource" to "BatteryManager.EXTRA_TEMPERATURE",
+        "batteryTempRaw" to batteryTempRaw,
         "batteryTempTenthsC" to batteryTempTenthsC,
+        "batteryTempC" to if (batteryTempTenthsC >= 0) batteryTempTenthsC / 10.0 else null,
         "batteryVoltageMv" to batteryVoltageMv,
         "batteryCurrentUa" to batteryCurrentUa,
         "plugged" to plugged,
@@ -52,7 +58,31 @@ internal data class ThermalSample(
         "sysZones" to JSONObject().apply {
             sysZones.forEach { (k, v) -> put(k, v) }
         },
+        "sysZonesC" to JSONObject().apply {
+            sysZones.forEach { (k, v) -> put(k, normalizeSysZoneC(v)) }
+        },
+        "powerProfile" to powerProfile?.toJson(),
     )
+}
+
+internal fun normalizeBatteryTempTenthsC(raw: Int): Int = when {
+    raw < 0 -> -1
+    raw > 1000 -> raw / 100
+    else -> raw
+}
+
+internal fun normalizeSysZoneC(raw: Int): Double =
+    if (kotlin.math.abs(raw) >= 1000) raw / 1000.0 else raw.toDouble()
+
+internal fun thermalStatusLabel(status: Int): String = when (status) {
+    PowerManager.THERMAL_STATUS_NONE -> "NONE"
+    PowerManager.THERMAL_STATUS_LIGHT -> "LIGHT"
+    PowerManager.THERMAL_STATUS_MODERATE -> "MODERATE"
+    PowerManager.THERMAL_STATUS_SEVERE -> "SEVERE"
+    PowerManager.THERMAL_STATUS_CRITICAL -> "CRITICAL"
+    PowerManager.THERMAL_STATUS_EMERGENCY -> "EMERGENCY"
+    PowerManager.THERMAL_STATUS_SHUTDOWN -> "SHUTDOWN"
+    else -> "UNKNOWN($status)"
 }
 
 internal sealed interface ThermalDecision {
@@ -62,112 +92,83 @@ internal sealed interface ThermalDecision {
 }
 
 /**
- * Hysteresis- and rate-of-rise-aware thermal and resource safety policy.
- * Allows a single transient MODERATE reading during active work to prevent unexplained silent stops,
- * applies a rapid temperature-rise rate guard (>= 2.0 °C over 30 s when >= 38.0 °C) to cool proactively,
- * enforces a 20 GB default configurable evidence cap plus a 5 GiB device free-space safety reserve,
- * and halts immediately on SEVERE OS thermal status, >= 45.0 °C battery, < 25% battery, or storage limit.
+ * Battery-hysteresis thermal policy aligned with active cooling:
+ * - Continues at full performance whenever battery < 40.0 °C and OS thermalStatus < SEVERE (3).
+ *   Does NOT pause at 32 °C / MODERATE or apply arbitrary trend-rate aborts.
+ * - Enters CooldownWait when battery >= 40.0 °C or OS thermalStatus >= SEVERE (3).
+ * - Automatically resumes once battery drops <= 35.0 °C AND OS thermalStatus < SEVERE (3),
+ *   without resetting or aborting the session.
+ * - Uses HardStop ONLY for unrecoverable resource limits (< 25% battery, < 5 GiB free reserve,
+ *   configured evidence cap) or OS EMERGENCY/SHUTDOWN status, preserving full checkpoint state.
  */
 internal class LabThermalPolicy(
-    private val maxCooldownMs: Long = DEFAULT_COOLDOWN_MS,
+    @Suppress("unused") private val maxCooldownMs: Long = DEFAULT_COOLDOWN_MS,
     private val evidenceLimitBytes: Long = DEFAULT_MAX_EVIDENCE_BYTES,
 ) {
-    private var consecutiveModerate = 0
-    private var cooldownStartedMs: Long? = null
-    private val tempHistory = ArrayDeque<Pair<Long, Int>>()
+    var inThermalPause: Boolean = false
+        private set
 
-    fun evaluate(sample: ThermalSample, betweenAttempts: Boolean = false): ThermalDecision {
-        recordTempSample(sample)
+    fun evaluate(sample: ThermalSample, @Suppress("unused") betweenAttempts: Boolean = false): ThermalDecision {
         val effectiveLimit = LabStorageManager.clampLimitBytes(
             evidenceLimitBytes.takeIf { it > 0L } ?: sample.evidenceLimitBytes,
         )
-        if (sample.batteryPercent in 0 until MIN_BATTERY_PERCENT || sample.batteryTempTenthsC >= MAX_BATTERY_TEMP_TENTHS_C) {
-            return ThermalDecision.HardStop("Research paused at the battery limit (25% charge or 45.0 °C).")
+        if (sample.batteryPercent in 0 until MIN_BATTERY_PERCENT) {
+            return ThermalDecision.HardStop("Research paused at the battery charge limit (< $MIN_BATTERY_PERCENT%).")
         }
         if (sample.freeBytes < MIN_FREE_BYTES) {
             return ThermalDecision.HardStop("Research paused to protect the 5.0 GiB device free-space safety reserve.")
         }
         if (sample.evidenceBytes >= effectiveLimit) {
             return ThermalDecision.HardStop(
-                "Research evidence reached the ${LabStorageManager.formatBytes(effectiveLimit)} configured local limit.",
+                "Research evidence reached the ${LabStorageManager.formatBytes(effectiveLimit)} configured local limit. Export or prune media to resume.",
             )
         }
-        if (sample.thermalStatus >= THERMAL_STATUS_SEVERE) {
+        if (sample.thermalStatus >= EMERGENCY_THERMAL_STATUS) {
             return ThermalDecision.HardStop(
-                "Research paused due to severe thermal load (status=${sample.thermalStatus}, ${formatC(sample.batteryTempTenthsC)}).",
+                "Research paused due to OS emergency thermal status (${thermalStatusLabel(sample.thermalStatus)}, ${formatC(sample.batteryTempTenthsC)}).",
             )
         }
-        val riseTenths = recentTempRiseTenths(sample.elapsedMs)
-        if (betweenAttempts &&
-            sample.batteryTempTenthsC >= PROACTIVE_TREND_FLOOR_TENTHS_C &&
-            riseTenths >= RAPID_TEMP_RISE_TENTHS_C
-        ) {
-            val started = cooldownStartedMs ?: sample.elapsedMs.also { cooldownStartedMs = it }
-            if (sample.elapsedMs - started < maxCooldownMs) {
-                val riseC = riseTenths / 10.0
-                return ThermalDecision.CooldownWait(
-                    "Proactive cooldown (rapid rise +${String.format(Locale.ROOT, "%.1f", riseC)} °C/30s, ${formatC(sample.batteryTempTenthsC)})…",
-                )
-            }
-        }
-        if (sample.thermalStatus == THERMAL_STATUS_MODERATE) {
-            if (sample.batteryTempTenthsC >= COOLDOWN_BATTERY_CEILING_TENTHS_C) {
-                return ThermalDecision.HardStop(
-                    "Research paused due to thermal load (status=MODERATE, ${formatC(sample.batteryTempTenthsC)}).",
-                )
-            }
-            consecutiveModerate++
-            if (!betweenAttempts && consecutiveModerate == 1) {
-                return ThermalDecision.Continue(transientModerate = true)
-            }
-            val started = cooldownStartedMs ?: sample.elapsedMs.also { cooldownStartedMs = it }
-            if (sample.elapsedMs - started >= maxCooldownMs) {
-                return ThermalDecision.HardStop(
-                    "Research paused after thermal cooldown (${formatC(sample.batteryTempTenthsC)}, status=MODERATE).",
-                )
-            }
+
+        val batteryHot = sample.batteryTempTenthsC >= PAUSE_BATTERY_TEMP_TENTHS_C
+        val batteryCooled = sample.batteryTempTenthsC < 0 || sample.batteryTempTenthsC <= RESUME_BATTERY_TEMP_TENTHS_C
+        val osDangerous = sample.thermalStatus >= DANGEROUS_THERMAL_STATUS
+
+        if (batteryHot || osDangerous) {
+            inThermalPause = true
             return ThermalDecision.CooldownWait(
-                "Cooling down (thermal=MODERATE, ${formatC(sample.batteryTempTenthsC)})…",
+                "Thermal pause (${formatC(sample.batteryTempTenthsC)}, OS=${thermalStatusLabel(sample.thermalStatus)}): " +
+                    "waiting for battery <= 35.0 °C and OS status < SEVERE to auto-resume…",
             )
         }
-        consecutiveModerate = 0
-        cooldownStartedMs = null
-        return ThermalDecision.Continue(transientModerate = false)
+
+        if (inThermalPause) {
+            if (!batteryCooled) {
+                return ThermalDecision.CooldownWait(
+                    "Thermal cooldown (${formatC(sample.batteryTempTenthsC)}, OS=${thermalStatusLabel(sample.thermalStatus)}): " +
+                        "auto-resuming at <= 35.0 °C…",
+                )
+            }
+            inThermalPause = false
+        }
+
+        return ThermalDecision.Continue(transientModerate = sample.thermalStatus == THERMAL_STATUS_MODERATE)
     }
 
     fun resetCooldown() {
-        consecutiveModerate = 0
-        cooldownStartedMs = null
-    }
-
-    private fun recordTempSample(sample: ThermalSample) {
-        if (sample.batteryTempTenthsC < 0) return
-        tempHistory.addLast(sample.elapsedMs to sample.batteryTempTenthsC)
-        val cutoff = sample.elapsedMs - TREND_WINDOW_MS
-        while (tempHistory.size > 1 && tempHistory.first().first < cutoff) {
-            tempHistory.removeFirst()
-        }
-    }
-
-    private fun recentTempRiseTenths(nowMs: Long): Int {
-        if (tempHistory.size < 2) return 0
-        val oldest = tempHistory.firstOrNull { nowMs - it.first <= TREND_WINDOW_MS } ?: return 0
-        val latest = tempHistory.last()
-        return (latest.second - oldest.second).coerceAtLeast(0)
+        inThermalPause = false
     }
 
     companion object {
         const val DEFAULT_COOLDOWN_MS = 45_000L
         const val MIN_BATTERY_PERCENT = 25
-        const val MAX_BATTERY_TEMP_TENTHS_C = 450
-        const val COOLDOWN_BATTERY_CEILING_TENTHS_C = 430
-        const val PROACTIVE_TREND_FLOOR_TENTHS_C = 380
-        const val RAPID_TEMP_RISE_TENTHS_C = 20
-        const val TREND_WINDOW_MS = 30_000L
+        const val PAUSE_BATTERY_TEMP_TENTHS_C = 400
+        const val RESUME_BATTERY_TEMP_TENTHS_C = 350
+        const val DANGEROUS_THERMAL_STATUS = PowerManager.THERMAL_STATUS_SEVERE
+        const val EMERGENCY_THERMAL_STATUS = PowerManager.THERMAL_STATUS_EMERGENCY
         const val MIN_FREE_BYTES = LabStorageManager.DEVICE_FREE_RESERVE_BYTES
         const val DEFAULT_MAX_EVIDENCE_BYTES = LabStorageManager.DEFAULT_EVIDENCE_LIMIT_BYTES
-        const val THERMAL_STATUS_MODERATE = 2
-        const val THERMAL_STATUS_SEVERE = 3
+        const val THERMAL_STATUS_MODERATE = PowerManager.THERMAL_STATUS_MODERATE
+        const val THERMAL_STATUS_SEVERE = PowerManager.THERMAL_STATUS_SEVERE
 
         private fun formatC(tenthsC: Int): String =
             if (tenthsC < 0) "unknown °C" else String.format(Locale.ROOT, "%.1f °C", tenthsC / 10.0)
@@ -178,12 +179,14 @@ internal fun sampleThermal(
     context: Context,
     evidenceRoot: File,
     evidenceLimitBytes: Long = LabStorageManager.loadEvidenceLimitBytes(context),
+    includePowerProfile: Boolean = true,
 ): ThermalSample {
     val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
     val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
     val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
     val percent = if (scale > 0 && level >= 0) 100 * level / scale else -1
-    val tempTenthsC = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+    val rawTemp = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+    val tempTenthsC = normalizeBatteryTempTenthsC(rawTemp)
     val voltageMv = batteryIntent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
     val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
     val batteryManager = context.getSystemService(BatteryManager::class.java)
@@ -200,6 +203,7 @@ internal fun sampleThermal(
         freeBytes = freeBytes,
         limitBytes = evidenceLimitBytes,
     ).totalBytes
+    val powerSnapshot = if (includePowerProfile) runCatching { LabPowerProfile.capture(context) }.getOrNull() else null
     return ThermalSample(
         elapsedMs = SystemClock.elapsedRealtime(),
         epochMs = System.currentTimeMillis(),
@@ -216,6 +220,8 @@ internal fun sampleThermal(
         evidenceBytes = evidenceBytes,
         sysZones = readSysThermalZones(),
         evidenceLimitBytes = evidenceLimitBytes,
+        batteryTempRaw = rawTemp,
+        powerProfile = powerSnapshot,
     )
 }
 
