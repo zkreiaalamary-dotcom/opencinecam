@@ -15,7 +15,7 @@ import java.util.zip.ZipOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal class LabJournal private constructor(private val directory: File, revision: String? = null) {
+internal class LabJournal private constructor(val directory: File, revision: String? = null) {
     private val header = File(directory, "run.json")
     private val complete = File(directory, "summary.json")
     private val telemetryFile = File(directory, "telemetry.jsonl")
@@ -158,11 +158,13 @@ internal class LabJournal private constructor(private val directory: File, revis
 private fun LabCase.toJson() = json(
     "camera" to camera, "path" to path.name, "width" to width, "height" to height, "fps" to fps,
     "hfr" to hfr, "listedByApp" to listed, "longer" to longer, "previewOnly" to previewOnly,
+    "flatToneMap" to flatToneMap, "retryIndex" to retryIndex,
 )
 
 private fun JSONObject.toCase() = LabCase(
     getString("camera"), LabPath.valueOf(getString("path")), getInt("width"), getInt("height"),
     getInt("fps"), getBoolean("hfr"), getBoolean("listedByApp"), getBoolean("longer"), getBoolean("previewOnly"),
+    optBoolean("flatToneMap", false), optInt("retryIndex", 0),
 )
 
 internal fun json(vararg values: Pair<String, Any?>) = JSONObject().apply {

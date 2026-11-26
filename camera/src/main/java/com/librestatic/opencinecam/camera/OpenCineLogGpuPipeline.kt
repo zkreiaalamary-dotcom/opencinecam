@@ -393,6 +393,27 @@ internal class GpuPipelineInitializationFailure(
  * image is sent to a ten-bit EGL encoder surface. Monitoring is a separate branch: either the
  * same flat OCLog code values or a Rec.709 view-assist transform is drawn to the UI Surface.
  */
+/**
+ * Explicit research-only encoder/EGL overrides used by ResearchLaboratory experiments to isolate
+ * MediaCodec configure contracts (explicit HEVC level, color keys, EGL 8/10-bit surface) without
+ * altering production defaults when null.
+ */
+data class ResearchEncoderOverride(
+    val explicitHevcLevel: Int? = null,
+    val colorStandard: Int? = null,
+    val colorRange: Int? = null,
+    val colorTransfer: Int? = null,
+    val forceEgl8BitForMain10: Boolean = false,
+    val omitEglBt2020ColorSpace: Boolean = false,
+    val allowAvcFallback: Boolean = true,
+)
+
+internal data class EglSurfacePolicy(
+    val use8BitConfig: Boolean,
+    val useBt2020Linear: Boolean,
+    val useHlgSurface: Boolean,
+)
+
 class OpenCineLogGpuPipeline(
     private val size: Size,
     private val sourcePath: OpenCineLogSourcePath,
@@ -413,11 +434,12 @@ class OpenCineLogGpuPipeline(
     private val onPreviewLost: ((String) -> Unit)? = null,
     private val onOperatorLutStatus: ((OperatorLutStatus) -> Unit)? = null,
     greyReference: OpenCineLogGreyReference = OpenCineLogGreyReference.NATIVE,
+    private val researchEncoderOverride: ResearchEncoderOverride? = null,
     private val onFailure: (String, String) -> Unit,
 ) : AutoCloseable {
     @Volatile private var researchObserver: Camera2ResearchObserver? = null
 
-    internal fun attachResearchObserver(observer: Camera2ResearchObserver?) {
+    fun attachResearchObserver(observer: Camera2ResearchObserver?) {
         researchObserver = observer
         observer?.onGpuSource(size.width, size.height, targetFps, sourcePath)
     }
@@ -1014,8 +1036,10 @@ class OpenCineLogGpuPipeline(
                 }
                 fun buildFormat(candidate: OpenCineLogEncoderCandidate) = MediaFormat.createVideoFormat(candidate.mime, encodedSize.width, encodedSize.height).apply {
                     setInteger(MediaFormat.KEY_PROFILE, candidate.profile)
-                    // OMX AVC requires the advertised level whenever a profile is supplied.
-                    candidate.level?.let { setInteger(MediaFormat.KEY_LEVEL, it) }
+                    // OMX AVC requires the advertised level whenever a profile is supplied; HiSilicon HEVC also requires an explicit level.
+                    resolveEffectiveLevel(candidate.mime, candidate.level, researchEncoderOverride)?.let {
+                        setInteger(MediaFormat.KEY_LEVEL, it)
+                    }
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                     setInteger(MediaFormat.KEY_BIT_RATE, RecordingDataRate.gpuVideoBps(bitrate, encoderRate))
                     if (timelapse == null && projectRateOverride == null) setInteger(MediaFormat.KEY_FRAME_RATE, targetFps)
@@ -1040,6 +1064,9 @@ class OpenCineLogGpuPipeline(
                         // (unspecified); some encoders still write a default, so verify with ffprobe.
                         // The sidecar is authoritative.
                     }
+                    researchEncoderOverride?.colorStandard?.let { setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
+                    researchEncoderOverride?.colorRange?.let { setInteger(MediaFormat.KEY_COLOR_RANGE, it) }
+                    researchEncoderOverride?.colorTransfer?.let { setInteger(MediaFormat.KEY_COLOR_TRANSFER, it) }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         setInteger(MediaFormat.KEY_PIXEL_ASPECT_RATIO_WIDTH, geometry.pixelAspectRatioWidth)
                         setInteger(MediaFormat.KEY_PIXEL_ASPECT_RATIO_HEIGHT, geometry.pixelAspectRatioHeight)
@@ -1051,12 +1078,13 @@ class OpenCineLogGpuPipeline(
                 var codec = encoderStep("codec_create", candidate.codecName) { MediaCodec.createByCodecName(candidate.codecName) }
                 var codecConfigured = false
                 if (useHevc) {
-                    // A hardware HEVC encoder may still refuse the exact format: retry once with H.264.
+                    // A hardware HEVC encoder may still refuse the exact format: retry once with H.264 unless disallowed in research mode.
                     try {
                         encoderStep("configure", candidate.codecName, format) { codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE) }
                         codecConfigured = true
                     } catch (failure: Exception) {
                         runCatching { codec.release() }
+                        if (researchEncoderOverride?.allowAvcFallback == false) throw failure
                         codecFallbackReason = "HEVC encoder ${candidate.codecName} refused the format (${failure.message ?: failure.javaClass.simpleName}); fell back to H.264."
                         android.util.Log.w("OpenCineLogGpuPipeline", requireNotNull(codecFallbackReason))
                         candidate = avcCandidate()
@@ -1085,13 +1113,15 @@ class OpenCineLogGpuPipeline(
                             requireNotNull(aacCalibration), requireNotNull(captureEpoch), fileRetirement::noteFailure) { preparation.isCancelled || closed.get() }
                     }
                     check(!preparation.isCancelled && !closed.get()) { "Recording preparation was cancelled" }
+                    val eglPolicy = resolveEglSurfacePolicy(passthroughSdr, hlgOutput, recordingLut != null, researchEncoderOverride)
                     val eglSurface = encoderStep("egl_window", candidate.codecName) {
                         createWindowSurface(
-                            if (passthroughSdr) requireNotNull(config8) else requireNotNull(config10),
+                            if (eglPolicy.use8BitConfig) requireNotNull(config8) else requireNotNull(config10),
                             requireNotNull(codecSurface),
-                            if (hlgOutput) hlgSurfaceAttributes(hdr10Output)
-                            else if (passthroughSdr || recordingLut != null) intArrayOf(EGL14.EGL_NONE) else {
-                                intArrayOf(EGL_GL_COLORSPACE_KHR, EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, EGL14.EGL_NONE)
+                            when {
+                                eglPolicy.useHlgSurface -> hlgSurfaceAttributes(hdr10Output)
+                                eglPolicy.useBt2020Linear -> intArrayOf(EGL_GL_COLORSPACE_KHR, EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, EGL14.EGL_NONE)
+                                else -> intArrayOf(EGL14.EGL_NONE)
                             },
                         ).also { check(it != EGL14.EGL_NO_SURFACE) { "Encoder did not accept the EGL window surface." } }
                     }
@@ -1253,10 +1283,11 @@ class OpenCineLogGpuPipeline(
         display = GpuEglDisplayLease.acquire()
         config10 = chooseConfig(10, 10, 10, 2)
         config8 = chooseConfig(8, 8, 8, 8) ?: error("An 8-bit EGL preview config is unavailable.")
-        if (!passthroughSdr && config10 == null) {
+        val eglPolicy = resolveEglSurfacePolicy(passthroughSdr, hlgOutput = false, hasRecordingLut = false, researchEncoderOverride)
+        if (!eglPolicy.use8BitConfig && config10 == null) {
             error("A 10-bit RGBA EGL render target is required for honest Main10 LOG recording.")
         }
-        val renderConfig = if (passthroughSdr) requireNotNull(config8) else requireNotNull(config10)
+        val renderConfig = if (eglPolicy.use8BitConfig) requireNotNull(config8) else requireNotNull(config10)
         context = EGL14.eglCreateContext(
             display,
             renderConfig,
@@ -2641,6 +2672,27 @@ class OpenCineLogGpuPipeline(
         private const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
 
         private fun hdrFormat(hdr10: Boolean) = if (hdr10) HdrVideoFormat.HDR10 else HdrVideoFormat.HLG
+
+        internal fun resolveEffectiveLevel(
+            mime: String,
+            candidateLevel: Int?,
+            override: ResearchEncoderOverride?,
+        ): Int? = if (mime == MediaFormat.MIMETYPE_VIDEO_HEVC && override?.explicitHevcLevel != null) {
+            override.explicitHevcLevel
+        } else {
+            candidateLevel
+        }
+
+        internal fun resolveEglSurfacePolicy(
+            passthroughSdr: Boolean,
+            hlgOutput: Boolean,
+            hasRecordingLut: Boolean,
+            override: ResearchEncoderOverride?,
+        ): EglSurfacePolicy = EglSurfacePolicy(
+            use8BitConfig = passthroughSdr || (override?.forceEgl8BitForMain10 == true),
+            useBt2020Linear = !hlgOutput && !passthroughSdr && !hasRecordingLut && override?.omitEglBt2020ColorSpace != true,
+            useHlgSurface = hlgOutput,
+        )
 
         /** HEVC Main10 hardware Surface encoder; rules live in [VideoEncoderSelector.selectSurfaceEncoder]. */
         fun findEncoder(size: Size, targetFps: Int): OpenCineLogEncoderCandidate? =

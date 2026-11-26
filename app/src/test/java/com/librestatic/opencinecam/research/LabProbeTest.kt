@@ -48,4 +48,12 @@ class LabProbeTest {
         assertEquals(MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel51, explicit[MediaFormat.KEY_LEVEL])
         assertEquals(20_000_000, plain[MediaFormat.KEY_BIT_RATE])
     }
+
+    @Test fun sustainedDirectIssueAccepts30sCleanTakeAndRejectsDrops() {
+        val thirtySec = (0..1799).map { it * 1_000_000L / 60 }
+        assertNull(labCadence(thirtySec, 60).sustainedDirectIssue(60))
+        assertNotNull(labCadence(thirtySec.take(600), 60).sustainedDirectIssue(60))
+        val withFourGaps = thirtySec.filterIndexed { i, _ -> i !in setOf(100, 300, 600, 900) }
+        assertNotNull(labCadence(withFourGaps, 60).sustainedDirectIssue(60))
+    }
 }

@@ -3,7 +3,26 @@
 
 package com.librestatic.opencinecam.research
 
-internal enum class LabPath { AVC, HEVC, LOG, HLG, HDR10, RAW_CAMERA, RAW_NATIVE, DIRECT_HEVC, DIRECT_HEVC_PREVIEW, CODEC_LEVEL_PAIR, CODEC_SYNTHETIC_MATRIX }
+internal enum class LabPath {
+    AVC,
+    HEVC,
+    LOG,
+    HLG,
+    HDR10,
+    RAW_CAMERA,
+    RAW_NATIVE,
+    DIRECT_HEVC,
+    DIRECT_HEVC_PREVIEW,
+    DIRECT_HEVC_SURFACETEXTURE,
+    CODEC_LEVEL_PAIR,
+    CODEC_SYNTHETIC_MATRIX,
+    LOG_REGULAR_4K30,
+    LOG_REGULAR_4K60,
+    GPU_HEVC_4K30,
+    GPU_HEVC_4K60,
+    ISP_TONEMAP_AB,
+    SOURCE_FORMAT_PROBE,
+}
 internal enum class LabStage { REQUESTED, CAMERA, PREVIEW, FIRST_CAMERA_RESULT, RECORDER, FIRST_GPU_FRAME, FIRST_ENCODED, STOPPED, RELEASED, FILE, RAW }
 internal enum class LabVerdict { OBSERVED, MISMATCH, FAILED, INTERRUPTED, STOPPED, ADMITTED, REVIEW }
 
@@ -17,10 +36,18 @@ internal data class LabCase(
     val listed: Boolean = true,
     val longer: Boolean = false,
     val previewOnly: Boolean = false,
+    val flatToneMap: Boolean = false,
+    val retryIndex: Int = 0,
 ) {
-    val key get() = "$camera/${path.name}/${width}x$height/$fps/$hfr/$longer/$previewOnly"
+    val key get() = "$camera/${path.name}/${width}x$height/$fps/$hfr/$longer/$previewOnly" +
+        (if (flatToneMap) "/flat" else "") +
+        (if (retryIndex > 0) "/retry$retryIndex" else "")
     val label get() = "${path.name} · ${width}×$height · $fps fps" +
-        (if (hfr) " · HFR" else "") + (if (previewOnly) " · preview only" else "")
+        (if (hfr) " · HFR" else "") +
+        (if (previewOnly) " · preview only" else "") +
+        (if (flatToneMap) " · FLAT" else "") +
+        (if (longer) " · sustained" else "") +
+        (if (retryIndex > 0) " · retry #$retryIndex" else "")
 }
 
 internal data class LabResult(val attempt: LabCase, val verdict: LabVerdict, val stage: LabStage, val id: String)

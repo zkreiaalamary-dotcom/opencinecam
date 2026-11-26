@@ -188,21 +188,32 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
     val mime = format.getString(MediaFormat.KEY_MIME)
     val signal = main10SignalOf(mime, format.intOrNull(MediaFormat.KEY_PROFILE),
         format.intOrNull(MediaFormat.KEY_COLOR_STANDARD), format.intOrNull(MediaFormat.KEY_COLOR_TRANSFER))
-    val main10 = if (case.path == LabPath.LOG || case.path == LabPath.HLG || case.path == LabPath.HDR10) {
+    val main10 = if (case.path in setOf(LabPath.LOG, LabPath.HLG, LabPath.HDR10, LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60)) {
         val kind = if (case.path == LabPath.HLG) Main10TakeKind.HLG else Main10TakeKind.LOG
         Main10FileChecks.evaluate(kind, signal, journal.clip.name, System.currentTimeMillis()).fileSignal
     } else null
     val pts = probe.pts
     val cadence = labCadence(pts, case.fps)
     val fps = cadence.fps
-    val directIssue = if (case.path == LabPath.DIRECT_HEVC || case.path == LabPath.DIRECT_HEVC_PREVIEW)
-        cadence.shortDirectIssue(case.fps) else null
+    val directIssue = if (case.path in setOf(LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE)) {
+        if (case.longer) cadence.sustainedDirectIssue(case.fps) else cadence.shortDirectIssue(case.fps)
+    } else null
     val csd0 = format.getByteBuffer("csd-0")?.duplicate()?.let { buf ->
         ByteArray(buf.remaining()).also { buf.get(it) }
     }
     val spsInfo = if (mime == MediaFormat.MIMETYPE_VIDEO_HEVC && csd0 != null) {
         HevcSpsInspector.inspect(csd0)
     } else null
+    val hevcRequired = setOf(
+        LabPath.HEVC, LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE,
+        LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60,
+    )
+    val sourceProvenance = when (case.path) {
+        LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60 -> "POST_ISP_SDR_LOG"
+        LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60 -> "POST_ISP_SDR_GPU"
+        LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE -> "DIRECT_ISP_HEVC"
+        else -> "UNSPECIFIED"
+    }
     val issue = when {
         fps == null || pts.size < 2 -> "No usable video cadence in the MP4."
         format.intOrNull(MediaFormat.KEY_WIDTH) != case.width ||
@@ -210,7 +221,7 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
         directIssue != null -> directIssue
         main10 != null && main10.status != QualificationStatus.PASS -> "Main10 file check: ${main10.reasonCode}"
         case.path == LabPath.HDR10 && (signal.colorStandard != "BT.2020" || signal.colorTransfer != "PQ") -> "PQ/BT.2020 tags missing."
-        case.path in setOf(LabPath.HEVC, LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW) && mime != MediaFormat.MIMETYPE_VIDEO_HEVC -> "Requested HEVC differs from the MP4 codec."
+        case.path in hevcRequired && mime != MediaFormat.MIMETYPE_VIDEO_HEVC -> "Requested HEVC differs from the MP4 codec."
         case.path == LabPath.AVC && mime != MediaFormat.MIMETYPE_VIDEO_AVC -> "Requested AVC differs from the MP4 codec."
         kotlin.math.abs(fps - case.fps) > case.fps * 0.05 -> "File cadence differs from the target by more than 5%."
         cadence.repeatedPts > 0 || cadence.longIntervals > 0 -> "File contains a repeated PTS or a cadence gap."
@@ -220,6 +231,7 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
         "format" to format.toString(), "mime" to mime, "profile" to signal.profile,
         "colorStandard" to signal.colorStandard, "colorTransfer" to signal.colorTransfer,
         "codedBitDepthFromProfile" to signal.bitDepth, "effectiveSourcePrecision" to "UNKNOWN",
+        "sourceProvenance" to sourceProvenance,
         "sps" to spsInfo?.let {
             json(
                 "profileIdc" to it.profileIdc, "tierFlag" to it.tierFlag, "levelIdc" to it.levelIdc,

@@ -68,7 +68,9 @@ internal class ResearchLaboratory(
                 .put("apkSourceRevision", build))
             val search = LabSearch(candidates)
             val video = LabVideo(context, profiles, ::checkBudget)
-            return explore(journal, search, video)
+            val regularLog = LabRegularLogRunner(context, descriptor, ::checkBudget)
+            val sourceProbe = LabSourceProbe(context, descriptor, ::checkBudget)
+            return explore(journal, search, video, regularLog, sourceProbe)
         } catch (stop: LabStop) {
             return stop.message.orEmpty()
         } finally {
@@ -77,7 +79,13 @@ internal class ResearchLaboratory(
         }
     }
 
-    private fun explore(journal: LabJournal, search: LabSearch, video: LabVideo): String {
+    private fun explore(
+        journal: LabJournal,
+        search: LabSearch,
+        video: LabVideo,
+        regularLog: LabRegularLogRunner,
+        sourceProbe: LabSourceProbe,
+    ): String {
         repeat(MAX_ATTEMPTS_PER_RUN) {
             awaitThermalClearance(journal)
             val history = journal.history()
@@ -94,7 +102,7 @@ internal class ResearchLaboratory(
             val attempt = journal.begin(next)
             val sample = lastSample ?: sampleThermal(context, root).also { lastSample = it }
             attempt.notice(sample.toJson())
-            val stopReason = execute(next.attempt, attempt, video)
+            val stopReason = execute(next.attempt, attempt, video, regularLog, sourceProbe)
             if (stopReason != null) return stopReason
             val until = SystemClock.elapsedRealtime() + 1_000
             while (SystemClock.elapsedRealtime() < until) {
@@ -106,13 +114,23 @@ internal class ResearchLaboratory(
         return "Experiment budget reached. Evidence is ready to export."
     }
 
-    private fun execute(case: LabCase, attempt: LabJournal.Attempt, video: LabVideo): String? {
+    private fun execute(
+        case: LabCase,
+        attempt: LabJournal.Attempt,
+        video: LabVideo,
+        regularLog: LabRegularLogRunner,
+        sourceProbe: LabSourceProbe,
+    ): String? {
         return try {
             val (verdict, reason) = when (case.path) {
                 LabPath.RAW_CAMERA, LabPath.RAW_NATIVE -> runRaw(case, attempt)
-                LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW -> LabDirectRecorder(context, ::checkBudget).run(case, attempt)
+                LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
+                    LabDirectRecorder(context, ::checkBudget).run(case, attempt)
                 LabPath.CODEC_LEVEL_PAIR -> runCodecLevelPair(case, attempt, ::checkBudget)
                 LabPath.CODEC_SYNTHETIC_MATRIX -> LabSyntheticEncoderProbe.run(attempt, ::checkBudget)
+                LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60 ->
+                    regularLog.run(case, attempt)
+                LabPath.ISP_TONEMAP_AB, LabPath.SOURCE_FORMAT_PROBE -> sourceProbe.run(case, attempt)
                 else -> video.run(case, attempt)
             }
             attempt.result(verdict, reason)

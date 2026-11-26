@@ -8,6 +8,13 @@ internal data class LabCadence(
     val samples: Int, val spanUs: Long, val fps: Double?, val repeatedPts: Int,
     val longIntervals: Int, val p95Us: Long?, val p99Us: Long?, val maxUs: Long?,
 ) {
+    fun sustainedDirectIssue(targetFps: Int): String? = when {
+        fps == null || spanUs < 27_000_000 -> "Sustained direct recorder did not deliver the 30 s measurement window."
+        repeatedPts > 0 || longIntervals > 2 -> "Sustained take had repeated PTS or more than 2 intervals above 1.5 frame periods."
+        abs(fps - targetFps) > targetFps * 0.01 -> "Sustained direct recorder cadence differs by more than 1%."
+        else -> null
+    }
+
     fun shortDirectIssue(targetFps: Int): String? = when {
         fps == null || spanUs < 3_500_000 -> "Direct recorder did not deliver the measurement window."
         repeatedPts > 0 || longIntervals > 0 -> "Repeated PTS or intervals above 1.5 frame periods."
