@@ -195,7 +195,7 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
     val pts = probe.pts
     val cadence = labCadence(pts, case.fps)
     val fps = cadence.fps
-    val directIssue = if (case.path in setOf(LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE)) {
+    val directIssue = if (case.path in setOf(LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE, LabPath.DIRECT_HEVC_SURFACETEXTURE_360P)) {
         if (case.longer) cadence.sustainedDirectIssue(case.fps) else cadence.shortDirectIssue(case.fps)
     } else null
     val csd0 = format.getByteBuffer("csd-0")?.duplicate()?.let { buf ->
@@ -206,12 +206,13 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
     } else null
     val hevcRequired = setOf(
         LabPath.HEVC, LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE,
-        LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60,
+        LabPath.DIRECT_HEVC_SURFACETEXTURE_360P, LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60,
+        LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60,
     )
     val sourceProvenance = when (case.path) {
         LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60 -> "POST_ISP_SDR_LOG"
         LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60 -> "POST_ISP_SDR_GPU"
-        LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE -> "DIRECT_ISP_HEVC"
+        LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE, LabPath.DIRECT_HEVC_SURFACETEXTURE_360P -> "DIRECT_ISP_HEVC"
         else -> "UNSPECIFIED"
     }
     val issue = when {

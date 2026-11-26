@@ -22,13 +22,10 @@ Grounded in verified findings from `تجربه1` (Runs 0–2) and `تجربه2` 
 
 ## 2. Phased Implementation Plan
 
-### Phase 1 — Research Lab Integrity & Dynamic Storage Manager (Immediate Next PR on Lab)
-1. **Fix the 6 Research Lab bugs** found in Runs 1–3:
-   - `LabSyntheticEncoderProbe.kt`: add `.trimIndent()` to shaders, add `HEVCMainTierLevel62 (16777216)` Main10 arms, delete 0-byte failed temp MP4s in `finally`.
-   - `LabRegularLogRunner.kt`: wire `gpu.onRecordedFrame = signals::onRecordingFrame`; cap `bitrate <= maxSupportedCodecBitrate` (avoid `60M -> 120M` over-limit via `gpuVideoBps` by passing pre-scaled/clamped bitrate or respecting codec `bitrateRange`).
-   - `LabSourceProbe.kt`: remove crashing `TONEMAP_MODE_PRESET_CURVE` (`4`) when not safely admitted (or catch + recover CameraService with explicit retry), and fail/flag `SOURCE_FORMAT_PROBE` (`H-08`) cleanly if `cameras.isEmpty()` instead of logging `OBSERVED`.
-   - `LabKnowledgeBase.kt`: match `codec_arm_result` alongside `codec_level_probe` for `H-01`; include `previewOnly` (and `flatToneMap`) in `baseKey` so `019` vs `020` never emit false contradictions.
-2. **Implement Dynamic Storage Management** (see §3 below) so accumulated runs never stall at 950 MB while 122 GB remain free.
+### Phase 1 — Research Lab Integrity & Dynamic Storage Manager *(Implemented & Host-Verified 2026-11-26; On-Device Execution Pending)*
+1. **Fixed all 7 Research Lab & pipeline bugs** (`LabSyntheticEncoderProbe.kt` GLSL `.trimIndent()` + Main10 `HEVCMainTierLevel62` + 0-byte temp deletion; `LabRegularLogRunner.kt` + `OpenCineLogGpuPipeline.resolveBitratePlan` fixing `60M -> 120M` double scaling & wiring `onRecordedFrame`/`onFirstRecordedFrame` + `OpenCineLogFrameDiagnostics`; `LabSourceProbe.kt` quarantining unadvertised `PRESET_SRGB`, adding `CameraManager.AvailabilityCallback`, failing `SOURCE_FORMAT_PROBE` on empty `cameras`, locking AE/AWB + `safeLinearRolloffCurve`; `LabKnowledgeBase.kt` fixing `codec_arm_result` + `baseKey` separation + 0-frame `INCONCLUSIVE` guard).
+2. **Implemented 20 GB Dynamic Storage & Safety Manager** (`LabStorageManager.kt`, `LabTelemetry.kt`, `ResearchLabScreen.kt`): `20 GB` configurable limit (`5/10/20/30/50 GB` UI chips), separate `5 GiB` device reserve, deduplicated canonical sizing, zero-temp-copy streaming SHA-256 readback ZIP export, and confirmation-gated verified media pruning preserving logs & knowledge.
+3. **Implemented Async PBO Scopes & 360p Dual-Output Check**: `AsyncPboScopeReader` (`GL_PIXEL_PACK_BUFFER`), `DIRECT_HEVC_SURFACETEXTURE_360P`, and failure-driven `LabAutonomousPlanner` variants (`egl8`, `novui`, `scopes_pbo`, `360p`).
 
 ### Phase 2 — Device Verification of `Main10` (`001` & `002`) & `4K60 GPU HEVC` (`004`)
 1. Run fixed Lab APK on `LMR-LX9`:

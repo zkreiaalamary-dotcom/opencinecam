@@ -185,10 +185,11 @@ internal class LabJournal private constructor(val directory: File, revision: Str
             return latest?.let { LabJournal(it) }
         }
 
-        fun exportAll(root: File, output: OutputStream) {
+        fun exportAll(root: File, output: OutputStream, additionalDirs: List<File> = emptyList()) {
+            val files = LabStorageManager.collectUniqueFiles(root, additionalDirs)
             ZipOutputStream(output).use { zip ->
-                root.walkTopDown().filter { it.isFile && !it.name.endsWith(".new") && !it.name.endsWith(".bak") }.forEach { file ->
-                    zip.putNextEntry(ZipEntry(file.relativeTo(root).invariantSeparatorsPath))
+                files.forEach { (relPath, file) ->
+                    zip.putNextEntry(ZipEntry(relPath))
                     file.inputStream().use { it.copyTo(zip) }
                     zip.closeEntry()
                 }
@@ -202,13 +203,13 @@ internal class LabJournal private constructor(val directory: File, revision: Str
 private fun LabCase.toJson() = json(
     "camera" to camera, "path" to path.name, "width" to width, "height" to height, "fps" to fps,
     "hfr" to hfr, "listedByApp" to listed, "longer" to longer, "previewOnly" to previewOnly,
-    "flatToneMap" to flatToneMap, "retryIndex" to retryIndex,
+    "flatToneMap" to flatToneMap, "retryIndex" to retryIndex, "variant" to variant,
 )
 
 private fun JSONObject.toCase() = LabCase(
     getString("camera"), LabPath.valueOf(getString("path")), getInt("width"), getInt("height"),
     getInt("fps"), getBoolean("hfr"), getBoolean("listedByApp"), getBoolean("longer"), getBoolean("previewOnly"),
-    optBoolean("flatToneMap", false), optInt("retryIndex", 0),
+    optBoolean("flatToneMap", false), optInt("retryIndex", 0), optString("variant", ""),
 )
 
 internal fun json(vararg values: Pair<String, Any?>) = JSONObject().apply {

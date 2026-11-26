@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,8 +21,11 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -60,6 +65,18 @@ internal data class LabUiProgress(
     val thermalStatus: Int? = null,
 )
 
+internal data class LabStorageUiState(
+    val usedBytes: Long,
+    val mediaBytes: Long,
+    val metadataBytes: Long,
+    val limitBytes: Long,
+    val freeBytes: Long,
+    val reserveBytes: Long,
+    val verifiedPrunableBytes: Long,
+    val verifiedPrunableFiles: Int,
+    val hasVerifiedExport: Boolean,
+)
+
 @Composable
 internal fun ResearchLabScreen(cameraId: String?, onBack: () -> Unit) {
     val context = LocalContext.current
@@ -91,14 +108,18 @@ internal fun ResearchLabScreen(cameraId: String?, onBack: () -> Unit) {
         running = controls.running,
         exporting = controls.exporting,
         progress = controls.progress,
+        storage = controls.storage,
         onBack = leave,
         onStart = { controls.start(resume = true) },
         onNew = { controls.start(resume = false) },
         onStop = controls::stop,
         onExport = { export.launch("OpenCineCam-research.zip") },
+        onSelectLimitBytes = controls::setLimitBytes,
+        onPruneVerified = controls::pruneVerified,
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ResearchLabContent(
     status: String?,
@@ -110,7 +131,11 @@ internal fun ResearchLabContent(
     onStop: () -> Unit,
     onExport: () -> Unit,
     progress: LabUiProgress? = null,
+    storage: LabStorageUiState? = null,
+    onSelectLimitBytes: ((Long) -> Unit)? = null,
+    onPruneVerified: (() -> Unit)? = null,
 ) {
+    var confirmPruneOpen by remember { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .windowInsetsPadding(WindowInsets.safeDrawing).verticalScroll(rememberScrollState()).padding(20.dp),
@@ -161,6 +186,60 @@ internal fun ResearchLabContent(
                 }
             }
         }
+        if (storage != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth().testTag("lab-storage"),
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Evidence: ${LabStorageManager.formatBytes(storage.usedBytes)} / ${LabStorageManager.formatBytes(storage.limitBytes)} " +
+                            "(media ${LabStorageManager.formatBytes(storage.mediaBytes)}, logs ${LabStorageManager.formatBytes(storage.metadataBytes)})",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.testTag("lab-storage-usage"),
+                    )
+                    Text(
+                        "Device free: ${LabStorageManager.formatBytes(storage.freeBytes)} · Safety reserve: 5.0 GiB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("lab-storage-reserve"),
+                    )
+                    if (onSelectLimitBytes != null) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            LabStorageManager.LIMIT_PRESETS_GB.forEach { gb ->
+                                val targetBytes = gb * 1_000_000_000L
+                                FilterChip(
+                                    selected = storage.limitBytes == targetBytes,
+                                    onClick = { if (!running && !exporting) onSelectLimitBytes(targetBytes) },
+                                    enabled = !running && !exporting,
+                                    label = { Text("$gb GB") },
+                                    modifier = Modifier.testTag("lab-limit-$gb"),
+                                )
+                            }
+                        }
+                    }
+                    if (onPruneVerified != null) {
+                        val canPrune = !running && !exporting && storage.hasVerifiedExport && storage.verifiedPrunableBytes > 0L
+                        OutlinedButton(
+                            onClick = { confirmPruneOpen = true },
+                            enabled = canPrune,
+                            modifier = Modifier.testTag("lab-prune-verified"),
+                        ) {
+                            val label = if (storage.hasVerifiedExport && storage.verifiedPrunableBytes > 0L) {
+                                "Clean verified exported media (${LabStorageManager.formatBytes(storage.verifiedPrunableBytes)})"
+                            } else {
+                                "Export & verify ZIP to enable media cleanup"
+                            }
+                            Text(label)
+                        }
+                    }
+                }
+            }
+        }
         if (running) {
             Button(onClick = onStop, modifier = Modifier.testTag("lab-stop")) { Text(stringResource(R.string.research_lab_stop)) }
         } else {
@@ -173,6 +252,31 @@ internal fun ResearchLabContent(
             }
         }
     }
+    if (confirmPruneOpen && storage != null && onPruneVerified != null) {
+        AlertDialog(
+            onDismissRequest = { confirmPruneOpen = false },
+            modifier = Modifier.testTag("lab-prune-dialog"),
+            title = { Text("Clean verified exported media?") },
+            text = {
+                Text(
+                    "Delete ${storage.verifiedPrunableFiles} media file(s) (${LabStorageManager.formatBytes(storage.verifiedPrunableBytes)}) " +
+                        "that passed SHA-256 readback export verification? All JSONL logs, telemetry, reports, and learned knowledge will remain intact.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmPruneOpen = false
+                        onPruneVerified()
+                    },
+                    modifier = Modifier.testTag("lab-prune-confirm"),
+                ) { Text("Delete verified media") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPruneOpen = false }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 private class ResearchLabControls(private val context: android.content.Context, private val cameraId: String?) {
@@ -183,10 +287,30 @@ private class ResearchLabControls(private val context: android.content.Context, 
         private set
     var progress by mutableStateOf<LabUiProgress?>(null)
         private set
+    var storage by mutableStateOf<LabStorageUiState?>(null)
+        private set
     var running by mutableStateOf(false)
         private set
     var exporting by mutableStateOf(false)
         private set
+
+    init {
+        refreshStorage()
+    }
+
+    fun refreshStorage() {
+        worker.execute {
+            val snap = loadStorageSnapshot()
+            main.post { storage = snap }
+        }
+    }
+
+    fun setLimitBytes(limitBytes: Long) {
+        if (running || exporting) return
+        val saved = LabStorageManager.saveEvidenceLimitBytes(context, limitBytes)
+        status = "Evidence storage limit updated to ${LabStorageManager.formatBytes(saved)}."
+        refreshStorage()
+    }
 
     fun start(resume: Boolean) {
         if (running || exporting) return
@@ -201,7 +325,8 @@ private class ResearchLabControls(private val context: android.content.Context, 
         status = context.getString(R.string.research_lab_preparing)
         worker.execute {
             val message = runCatching { run.run(resume) }.getOrElse { it.message ?: it.javaClass.simpleName }
-            main.post { status = message; running = false; this.run = null }
+            val snap = loadStorageSnapshot()
+            main.post { status = message; storage = snap; running = false; this.run = null }
         }
     }
 
@@ -212,12 +337,46 @@ private class ResearchLabControls(private val context: android.content.Context, 
             val message = runCatching {
                 val root = ResearchLaboratory.evidenceRoot(context)
                 check(LabJournal.latest(root) != null) { context.getString(R.string.research_lab_no_evidence) }
-                val output = requireNotNull(context.contentResolver.openOutputStream(uri))
-                LabJournal.exportAll(root, output)
-                context.getString(R.string.research_lab_exported)
+                val verification = LabStorageManager.streamingVerifiedExport(
+                    root = root,
+                    outputProvider = { requireNotNull(context.contentResolver.openOutputStream(uri)) },
+                    readbackProvider = { requireNotNull(context.contentResolver.openInputStream(uri)) },
+                )
+                verification.message
             }.getOrElse { it.message ?: it.javaClass.simpleName }
-            main.post { status = message; exporting = false }
+            val snap = loadStorageSnapshot()
+            main.post { status = message; storage = snap; exporting = false }
         }
+    }
+
+    fun pruneVerified() {
+        if (running || exporting) return
+        exporting = true
+        worker.execute {
+            val message = runCatching {
+                val root = ResearchLaboratory.evidenceRoot(context)
+                LabStorageManager.pruneVerifiedExportedMedia(root).message
+            }.getOrElse { it.message ?: it.javaClass.simpleName }
+            val snap = loadStorageSnapshot()
+            main.post { status = message; storage = snap; exporting = false }
+        }
+    }
+
+    private fun loadStorageSnapshot(): LabStorageUiState {
+        val root = ResearchLaboratory.evidenceRoot(context)
+        val limit = LabStorageManager.loadEvidenceLimitBytes(context)
+        val usage = LabStorageManager.measureUsage(root = root, limitBytes = limit)
+        return LabStorageUiState(
+            usedBytes = usage.totalBytes,
+            mediaBytes = usage.mediaBytes,
+            metadataBytes = usage.metadataBytes,
+            limitBytes = usage.limitBytes,
+            freeBytes = usage.freeBytes,
+            reserveBytes = usage.reserveBytes,
+            verifiedPrunableBytes = usage.verifiedPrunableBytes,
+            verifiedPrunableFiles = usage.verifiedPrunableFiles,
+            hasVerifiedExport = usage.hasVerifiedExport,
+        )
     }
 
     fun stop() {

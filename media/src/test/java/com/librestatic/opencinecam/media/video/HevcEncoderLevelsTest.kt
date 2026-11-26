@@ -54,4 +54,22 @@ class HevcEncoderLevelsTest {
         assertEquals("MainTierLevel51", HevcEncoderLevels.hevcLevelName(CodecProfileLevel.HEVCMainTierLevel51))
         assertEquals("MainTierLevel52", HevcEncoderLevels.hevcLevelName(CodecProfileLevel.HEVCMainTierLevel52))
     }
+
+    @Test
+    fun selectHevcLevelForProfileSeparatesMain8AndMain10Levels() {
+        // Mirrors Huawei Pura 80 Pro OMX.hisi.video.encoder.hevc where Main10 advertises only Level 6.2.
+        val hisiProfileLevels = listOf(
+            EncoderProfileLevel(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCMainTierLevel5),
+            EncoderProfileLevel(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCMainTierLevel51),
+            EncoderProfileLevel(CodecProfileLevel.HEVCProfileMain10, CodecProfileLevel.HEVCMainTierLevel62),
+        )
+        assertEquals(
+            CodecProfileLevel.HEVCMainTierLevel51,
+            HevcEncoderLevels.selectHevcLevelForProfile(CodecProfileLevel.HEVCProfileMain, 3840, 2160, 60, hisiProfileLevels),
+        )
+        assertEquals(
+            CodecProfileLevel.HEVCMainTierLevel62,
+            HevcEncoderLevels.selectHevcLevelForProfile(CodecProfileLevel.HEVCProfileMain10, 3840, 2160, 30, hisiProfileLevels),
+        )
+    }
 }

@@ -59,11 +59,20 @@ class LabTelemetryTest {
     fun severeOrBatteryOrStorageLimitsTriggerImmediateHardStop() {
         val policy = LabThermalPolicy()
         assertTrue(policy.evaluate(sample(thermalStatus = 3)) is ThermalDecision.HardStop)
-        assertTrue(policy.evaluate(sample(batteryTempTenthsC = 420)) is ThermalDecision.HardStop)
+        assertTrue(policy.evaluate(sample(batteryTempTenthsC = 450)) is ThermalDecision.HardStop)
         assertTrue(policy.evaluate(sample(batteryPercent = 24)) is ThermalDecision.HardStop)
-        assertTrue(policy.evaluate(sample(freeBytes = 1_000_000_000L)) is ThermalDecision.HardStop)
-        assertTrue(policy.evaluate(sample(evidenceBytes = 960_000_000L)) is ThermalDecision.HardStop)
-        assertTrue(policy.evaluate(sample(thermalStatus = 2, batteryTempTenthsC = 400)) is ThermalDecision.HardStop)
+        assertTrue(policy.evaluate(sample(freeBytes = LabStorageManager.DEVICE_FREE_RESERVE_BYTES - 1L)) is ThermalDecision.HardStop)
+        assertTrue(policy.evaluate(sample(evidenceBytes = LabStorageManager.DEFAULT_EVIDENCE_LIMIT_BYTES)) is ThermalDecision.HardStop)
+        assertTrue(policy.evaluate(sample(thermalStatus = 2, batteryTempTenthsC = 430)) is ThermalDecision.HardStop)
+    }
+
+    @Test
+    fun rapidTemperatureRiseAboveFloorTriggersProactiveCooldownBeforeSevere() {
+        val policy = LabThermalPolicy(maxCooldownMs = 45_000L)
+        assertEquals(ThermalDecision.Continue(false), policy.evaluate(sample(elapsedMs = 1_000L, batteryTempTenthsC = 370), betweenAttempts = true))
+        val decision = policy.evaluate(sample(elapsedMs = 20_000L, batteryTempTenthsC = 395), betweenAttempts = true)
+        assertTrue(decision is ThermalDecision.CooldownWait)
+        assertTrue((decision as ThermalDecision.CooldownWait).reason.contains("Proactive cooldown"))
     }
 
     @Test

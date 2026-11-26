@@ -6,15 +6,31 @@ package com.librestatic.opencinecam.camera
 import android.os.SystemClock
 import android.util.Log
 
+data class GpuFrameDiagSummary(
+    val totalFrames: Long,
+    val totalGaps: Long,
+    val totalMissingFrames: Long,
+    val maxTotalUs: Long,
+    val maxLatchUs: Long,
+    val maxEncoderDrawUs: Long,
+    val maxEncoderSwapUs: Long,
+    val maxScopesUs: Long,
+    val maxSubjectUs: Long,
+    val maxPreviewDrawUs: Long,
+    val maxPreviewSwapUs: Long,
+    val maxDrainWriteUs: Long,
+    val maxDrainDequeueGapUs: Long,
+)
+
 /**
  * Opt-in frame-drop diagnostics for the OCLog GL thread and codec drain.
  *
- * Off unless `adb shell setprop log.tag.OCLogFrameDiag DEBUG` is set before the pipeline is
- * created. Each rendered frame records how long every phase of [OpenCineLogGpuPipeline]'s render
- * loop took. When the camera timestamp jumps by more than 1.5 frame intervals, the jump and the
- * phase timings of the frames before it are logged, so a camera-side gap (the loop was fast)
- * can be told apart from back-pressure (the loop was slow before the gap). A summary is logged
- * every second.
+ * Off unless `adb shell setprop log.tag.OCLogFrameDiag DEBUG` or research-mode diagnostics are
+ * enabled before the pipeline is created. Each rendered frame records how long every phase of
+ * [OpenCineLogGpuPipeline]'s render loop took. When the camera timestamp jumps by more than 1.5
+ * frame intervals, the jump and the phase timings of the frames before it are logged, so a
+ * camera-side gap (the loop was fast) can be told apart from back-pressure (the loop was slow
+ * before the gap). A summary is logged every second and also available via [snapshotSummary].
  */
 internal class OpenCineLogFrameDiagnostics private constructor() {
     enum class Phase { LATCH, ENCODER_DRAW, ENCODER_SWAP, SCOPES, SUBJECT, PREVIEW_DRAW, PREVIEW_SWAP }
@@ -36,6 +52,15 @@ internal class OpenCineLogFrameDiagnostics private constructor() {
     private var windowMissing = 0
     private val windowMaxUs = LongArray(Phase.entries.size)
     private var windowMaxTotalUs = 0L
+
+    // Cumulative session counters for Research Lab diagnostics.
+    @Volatile private var totalFrames = 0L
+    @Volatile private var totalGaps = 0L
+    @Volatile private var totalMissingFrames = 0L
+    private val sessionMaxUs = LongArray(Phase.entries.size)
+    @Volatile private var sessionMaxTotalUs = 0L
+    @Volatile private var sessionMaxDrainWriteUs = 0L
+    @Volatile private var sessionMaxDrainDequeueGapUs = 0L
 
     // Codec drain thread.
     @Volatile private var drainMaxWriteUs = 0L
@@ -70,6 +95,8 @@ internal class OpenCineLogFrameDiagnostics private constructor() {
                 val missing = ((delta + intervalNs / 2) / intervalNs - 1).toInt()
                 windowGaps++
                 windowMissing += missing
+                totalGaps++
+                totalMissingFrames += missing.toLong()
                 Log.w(TAG, "GAP sensorDelta=${delta / 1_000}us missing=$missing " +
                     "callbackGap=${(frameStartNs - previousCallbackNs) / 1_000}us lastFrames=" +
                     history.joinToString(" | ") { describe(it) } + " | now: " + describe(frame))
@@ -80,8 +107,13 @@ internal class OpenCineLogFrameDiagnostics private constructor() {
         history.addLast(frame)
         while (history.size > HISTORY) history.removeFirst()
         windowFrames++
-        for (i in phasesUs.indices) windowMaxUs[i] = maxOf(windowMaxUs[i], phasesUs[i])
+        totalFrames++
+        for (i in phasesUs.indices) {
+            windowMaxUs[i] = maxOf(windowMaxUs[i], phasesUs[i])
+            sessionMaxUs[i] = maxOf(sessionMaxUs[i], phasesUs[i])
+        }
         windowMaxTotalUs = maxOf(windowMaxTotalUs, total)
+        sessionMaxTotalUs = maxOf(sessionMaxTotalUs, total)
         if (windowStartNs == 0L) windowStartNs = end
         if (end - windowStartNs >= 1_000_000_000L) {
             Log.d(TAG, "1s frames=$windowFrames gaps=$windowGaps missing=$windowMissing maxTotal=${windowMaxTotalUs}us max{" +
@@ -101,11 +133,32 @@ internal class OpenCineLogFrameDiagnostics private constructor() {
     /** Called on the drain thread for each muxed video sample. */
     fun videoSampleWritten(writeUs: Long) {
         val now = SystemClock.elapsedRealtimeNanos()
-        if (lastVideoOutputNs != 0L) drainMaxDequeueGapUs = maxOf(drainMaxDequeueGapUs, (now - lastVideoOutputNs) / 1_000)
+        if (lastVideoOutputNs != 0L) {
+            val gap = (now - lastVideoOutputNs) / 1_000
+            drainMaxDequeueGapUs = maxOf(drainMaxDequeueGapUs, gap)
+            sessionMaxDrainDequeueGapUs = maxOf(sessionMaxDrainDequeueGapUs, gap)
+        }
         lastVideoOutputNs = now
         drainMaxWriteUs = maxOf(drainMaxWriteUs, writeUs)
+        sessionMaxDrainWriteUs = maxOf(sessionMaxDrainWriteUs, writeUs)
         if (writeUs > SLOW_WRITE_US) Log.w(TAG, "SLOW muxer write ${writeUs}us")
     }
+
+    fun snapshotSummary(): GpuFrameDiagSummary = GpuFrameDiagSummary(
+        totalFrames = totalFrames,
+        totalGaps = totalGaps,
+        totalMissingFrames = totalMissingFrames,
+        maxTotalUs = sessionMaxTotalUs,
+        maxLatchUs = sessionMaxUs[Phase.LATCH.ordinal],
+        maxEncoderDrawUs = sessionMaxUs[Phase.ENCODER_DRAW.ordinal],
+        maxEncoderSwapUs = sessionMaxUs[Phase.ENCODER_SWAP.ordinal],
+        maxScopesUs = sessionMaxUs[Phase.SCOPES.ordinal],
+        maxSubjectUs = sessionMaxUs[Phase.SUBJECT.ordinal],
+        maxPreviewDrawUs = sessionMaxUs[Phase.PREVIEW_DRAW.ordinal],
+        maxPreviewSwapUs = sessionMaxUs[Phase.PREVIEW_SWAP.ordinal],
+        maxDrainWriteUs = sessionMaxDrainWriteUs,
+        maxDrainDequeueGapUs = sessionMaxDrainDequeueGapUs,
+    )
 
     private fun describe(frame: Frame): String =
         "t=${frame.sensorNs / 1_000}us lag=${frame.callbackLagUs} total=${frame.totalUs} " +
@@ -117,8 +170,11 @@ internal class OpenCineLogFrameDiagnostics private constructor() {
         private const val HISTORY = 8
         private const val SLOW_WRITE_US = 8_000L
 
+        /** Returns a recorder when the log tag is enabled or forced for research, otherwise null. */
+        fun create(forceEnable: Boolean = false): OpenCineLogFrameDiagnostics? =
+            if (forceEnable || Log.isLoggable(TAG, Log.DEBUG)) OpenCineLogFrameDiagnostics() else null
+
         /** Returns a recorder when the log tag is enabled, otherwise null (zero per-frame cost). */
-        fun createIfEnabled(): OpenCineLogFrameDiagnostics? =
-            if (Log.isLoggable(TAG, Log.DEBUG)) OpenCineLogFrameDiagnostics() else null
+        fun createIfEnabled(): OpenCineLogFrameDiagnostics? = create(forceEnable = false)
     }
 }

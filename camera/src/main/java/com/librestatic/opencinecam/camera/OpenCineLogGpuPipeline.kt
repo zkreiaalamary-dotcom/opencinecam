@@ -75,6 +75,7 @@ data class OpenCineLogEncoderCandidate(
     val hardwareAccelerated: Boolean = true,
     val level: Int? = null,
     val mime: String = MediaFormat.MIMETYPE_VIDEO_HEVC,
+    val maxBitrateBps: Int? = null,
 )
 
 /**
@@ -395,7 +396,8 @@ internal class GpuPipelineInitializationFailure(
  */
 /**
  * Explicit research-only encoder/EGL overrides used by ResearchLaboratory experiments to isolate
- * MediaCodec configure contracts (explicit HEVC level, color keys, EGL 8/10-bit surface) without
+ * MediaCodec configure contracts (explicit HEVC level, color keys, EGL 8/10-bit surface,
+ * unscaled target bitrate, VUI pass-through, async PBO scopes, frame diagnostics) without
  * altering production defaults when null.
  */
 data class ResearchEncoderOverride(
@@ -406,6 +408,18 @@ data class ResearchEncoderOverride(
     val forceEgl8BitForMain10: Boolean = false,
     val omitEglBt2020ColorSpace: Boolean = false,
     val allowAvcFallback: Boolean = true,
+    val explicitTargetBitrateBps: Int? = null,
+    val disableVuiRewrite: Boolean = false,
+    val useAsyncPboScopes: Boolean = false,
+    val enableFrameDiagnostics: Boolean = false,
+)
+
+data class BitrateResolution(
+    val requestedTargetBps: Int,
+    val computedScaledBps: Int,
+    val sentToCodecBps: Int,
+    val codecMaxBps: Int?,
+    val clampedByCodecMax: Boolean,
 )
 
 internal data class EglSurfacePolicy(
@@ -458,10 +472,16 @@ class OpenCineLogGpuPipeline(
     }
 
     private val thread = HandlerThread("OpenCineLogGL").apply { start() }
-    private val frameDiag = OpenCineLogFrameDiagnostics.createIfEnabled()
+    private val frameDiag = OpenCineLogFrameDiagnostics.create(researchEncoderOverride?.enableFrameDiagnostics == true)
+    private var asyncPboScopeReader: AsyncPboScopeReader? = if (researchEncoderOverride?.useAsyncPboScopes == true) AsyncPboScopeReader() else null
+    @Volatile private var lastBitrateResolution: BitrateResolution? = null
     private val viewfinderGapTrace = if (LensSwitchDiagnostics.enabled()) ViewfinderGapTrace() else null
     /** Set when the latest SDR take fell back from HEVC to H.264; reset by each start. */
     @Volatile private var codecFallbackReason: String? = null
+
+    fun lastBitrateResolutionSnapshot(): BitrateResolution? = lastBitrateResolution
+    fun frameDiagnosticsSnapshot(): GpuFrameDiagSummary? = frameDiag?.snapshotSummary()
+    fun scopePboStatsSnapshot(): AsyncPboStats? = asyncPboScopeReader?.stats()
     private val handler = Handler(thread.looper)
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var context: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -1041,7 +1061,9 @@ class OpenCineLogGpuPipeline(
                         setInteger(MediaFormat.KEY_LEVEL, it)
                     }
                     setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                    setInteger(MediaFormat.KEY_BIT_RATE, RecordingDataRate.gpuVideoBps(bitrate, encoderRate))
+                    val bitratePlan = resolveBitratePlan(bitrate, encoderRate, candidate.maxBitrateBps, researchEncoderOverride)
+                    lastBitrateResolution = bitratePlan
+                    setInteger(MediaFormat.KEY_BIT_RATE, bitratePlan.sentToCodecBps)
                     if (timelapse == null && projectRateOverride == null) setInteger(MediaFormat.KEY_FRAME_RATE, targetFps)
                     else setFloat(MediaFormat.KEY_FRAME_RATE, projectFps.toFloat())
                     if (timelapse != null || projectRateOverride != null) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
@@ -1545,13 +1567,19 @@ class OpenCineLogGpuPipeline(
             recordingGeometry = null,
             lensCorrected = correctionEnabledForReadback,
         )
-        val rgba = ByteBuffer.allocateDirect(width * height * 4)
-        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, rgba)
-        val error = GLES30.glGetError()
-        check(error == GLES30.GL_NO_ERROR) { "Scope readback failed with GL error 0x${error.toString(16)}." }
-        val bytes = ByteArray(rgba.capacity())
-        rgba.position(0)
-        rgba.get(bytes)
+        val pboReader = asyncPboScopeReader
+        val bytes = if (pboReader != null) {
+            pboReader.readRgba(width, height)
+        } else {
+            val rgba = ByteBuffer.allocateDirect(width * height * 4)
+            GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, rgba)
+            val error = GLES30.glGetError()
+            check(error == GLES30.GL_NO_ERROR) { "Scope readback failed with GL error 0x${error.toString(16)}." }
+            ByteArray(rgba.capacity()).also {
+                rgba.position(0)
+                rgba.get(it)
+            }
+        }
         callback(analyzeRgbaFrame(width, height, bytes, now, options,
             if (passthroughSdr) MonitoringSignalDomain.SDR_BT709_CODE else MonitoringSignalDomain.OCLOG2_CODE,
             scopeStep = scale, focusPeaking = peaking).copy(sensorTimestampNs = frameTimestampNs))
@@ -1863,20 +1891,25 @@ class OpenCineLogGpuPipeline(
         // H.273 unspecified in every SPS; HLG takes get 18 instead of the encoder's PQ. An SPS that
         // cannot be parsed keeps the encoder's tag.
         val forcedTransfer = active.vuiTransfer ?: HevcVuiTransfer.UNSPECIFIED
-        fun clearTransfer(annexB: ByteArray): ByteArray = try {
-            HevcVuiTransfer.rewrite(annexB, forcedTransfer).let { result ->
-                result.previousTransfer?.let { if (active.encoderVuiTransfer == null) active.encoderVuiTransfer = it }
-                result.bytes
+        val skipVuiRewrite = researchEncoderOverride?.disableVuiRewrite == true
+        fun clearTransfer(annexB: ByteArray): ByteArray {
+            if (skipVuiRewrite) return annexB
+            return try {
+                HevcVuiTransfer.rewrite(annexB, forcedTransfer).let { result ->
+                    result.previousTransfer?.let { if (active.encoderVuiTransfer == null) active.encoderVuiTransfer = it }
+                    result.bytes
+                }
+            } catch (failure: IllegalArgumentException) {
+                if (!active.vuiRewriteLogged) {
+                    active.vuiRewriteLogged = true
+                    android.util.Log.w(LOG_TAG, "HEVC SPS could not be parsed; the encoder's transfer tag stays.", failure)
+                }
+                annexB
             }
-        } catch (failure: IllegalArgumentException) {
-            if (!active.vuiRewriteLogged) {
-                active.vuiRewriteLogged = true
-                android.util.Log.w(LOG_TAG, "HEVC SPS could not be parsed; the encoder's transfer tag stays.", failure)
-            }
-            annexB
         }
 
         fun clearFormatTransfer(format: MediaFormat) {
+            if (skipVuiRewrite) return
             val csd = format.getByteBuffer("csd-0")?.duplicate()?.let { value -> ByteArray(value.remaining()).also { value.get(it) } } ?: return
             val cleared = clearTransfer(csd)
             active.containerVuiTransfer = runCatching { HevcVuiTransfer.transferOf(cleared) }.getOrNull()
@@ -2202,6 +2235,8 @@ class OpenCineLogGpuPipeline(
                     inputSurface?.release()
                     calibrationListener = null
                     freeCalibrationReadback()
+                    asyncPboScopeReader?.release()
+                    asyncPboScopeReader = null
                     if (operatorLutProgram != 0) GLES30.glDeleteProgram(operatorLutProgram)
                     if (hlgSignalProgram != 0) GLES30.glDeleteProgram(hlgSignalProgram)
                     if (operatorLutTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(operatorLutTexture), 0)
@@ -2673,6 +2708,30 @@ class OpenCineLogGpuPipeline(
 
         private fun hdrFormat(hdr10: Boolean) = if (hdr10) HdrVideoFormat.HDR10 else HdrVideoFormat.HLG
 
+        fun resolveBitratePlan(
+            requestedTargetBps: Int,
+            encoderRate: Int,
+            codecMaxBps: Int?,
+            override: ResearchEncoderOverride?,
+        ): BitrateResolution {
+            val explicit = override?.explicitTargetBitrateBps
+            val effectiveRequest = explicit ?: requestedTargetBps
+            val computed = if (explicit != null) {
+                explicit.coerceIn(8_000_000, 200_000_000)
+            } else {
+                RecordingDataRate.gpuVideoBps(requestedTargetBps, encoderRate)
+            }
+            val clampedByCodecMax = codecMaxBps != null && computed > codecMaxBps
+            val sent = if (clampedByCodecMax) requireNotNull(codecMaxBps) else computed
+            return BitrateResolution(
+                requestedTargetBps = effectiveRequest,
+                computedScaledBps = computed,
+                sentToCodecBps = sent,
+                codecMaxBps = codecMaxBps,
+                clampedByCodecMax = clampedByCodecMax,
+            )
+        }
+
         internal fun resolveEffectiveLevel(
             mime: String,
             candidateLevel: Int?,
@@ -2698,25 +2757,25 @@ class OpenCineLogGpuPipeline(
         fun findEncoder(size: Size, targetFps: Int): OpenCineLogEncoderCandidate? =
             VideoEncoderSelector().selectSurfaceEncoder(
                 SurfaceEncoderPolicy.HEVC_MAIN10_HARDWARE, size.width, size.height, targetFps, platformSurfaceEncoders(),
-            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level) }
+            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level, maxBitrateBps = it.maxBitrateBps) }
 
         /** HEVC Main10 HDR10 hardware Surface encoder, the only kind HDR10 (PQ) takes may use. */
         fun findHdr10Encoder(size: Size, targetFps: Int): OpenCineLogEncoderCandidate? =
             VideoEncoderSelector().selectSurfaceEncoder(
                 SurfaceEncoderPolicy.HEVC_HDR10_HARDWARE, size.width, size.height, targetFps, platformSurfaceEncoders(),
-            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level) }
+            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level, maxBitrateBps = it.maxBitrateBps) }
 
         /** AVC High Surface encoder; software is admitted only when [allowSoftware], and the caller then applies the policy. */
         fun findAvcEncoder(size: Size, targetFps: Int, allowSoftware: Boolean = false): OpenCineLogEncoderCandidate? =
             VideoEncoderSelector().selectSurfaceEncoder(
                 SurfaceEncoderPolicy.avcHigh(allowSoftware), size.width, size.height, targetFps, platformSurfaceEncoders(),
-            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level, MediaFormat.MIMETYPE_VIDEO_AVC) }
+            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level, MediaFormat.MIMETYPE_VIDEO_AVC, maxBitrateBps = it.maxBitrateBps) }
 
         /** HEVC Main (8-bit SDR) hardware Surface encoder for the passthrough route. */
         fun findHevcSdrEncoder(size: Size, targetFps: Int): OpenCineLogEncoderCandidate? =
             VideoEncoderSelector().selectSurfaceEncoder(
                 SurfaceEncoderPolicy.HEVC_MAIN_HARDWARE, size.width, size.height, targetFps, platformSurfaceEncoders(),
-            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level) }
+            )?.let { OpenCineLogEncoderCandidate(it.codecName, it.profile, size, it.hardwareAccelerated, it.level, maxBitrateBps = it.maxBitrateBps) }
 
         private val VERTEX_SHADER = """
             #version 300 es

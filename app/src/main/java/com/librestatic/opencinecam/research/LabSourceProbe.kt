@@ -198,12 +198,26 @@ internal class LabSourceProbe(
 
         val empiricalToneModes = mutableListOf<Int>()
         val toneArms = JSONArray()
+        val advertisedToneModes = caps.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
         val toneRequests = listOf(
-            "GAMMA_2_2" to CaptureRequest.TONEMAP_MODE_GAMMA_VALUE,
-            "PRESET_SRGB" to CaptureRequest.TONEMAP_MODE_PRESET_CURVE,
+            Triple("GAMMA_2_2", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 2.2f),
+            Triple("GAMMA_1_0_LINEAR_PROBE", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.0f),
+            Triple("PRESET_SRGB", CaptureRequest.TONEMAP_MODE_PRESET_CURVE, 0f),
         )
-        for ((name, mode) in toneRequests) {
+        for ((name, mode, gamma) in toneRequests) {
             checkBudget()
+            // PRESET_CURVE (4) triggered cameraserver SIGABRT on Pura 80 Pro when unadvertised.
+            if (mode == CaptureRequest.TONEMAP_MODE_PRESET_CURVE && mode !in advertisedToneModes) {
+                val skippedObj = json(
+                    "armName" to name,
+                    "requestedToneMapMode" to mode,
+                    "skipped" to true,
+                    "skipReason" to "TONEMAP_MODE_PRESET_CURVE not advertised in TONEMAP_AVAILABLE_TONE_MAP_MODES; quarantined to prevent cameraserver crash.",
+                )
+                toneArms.put(skippedObj)
+                attempt.notice(json("event" to "isp_tonemap_extra_arm", "details" to skippedObj))
+                continue
+            }
             val armObj = try {
                 captureConfiguredYuvProbe(
                     cameraId = case.camera,
@@ -213,7 +227,7 @@ internal class LabSourceProbe(
                 ) { builder ->
                     builder.set(CaptureRequest.TONEMAP_MODE, mode)
                     if (mode == CaptureRequest.TONEMAP_MODE_GAMMA_VALUE) {
-                        builder.set(CaptureRequest.TONEMAP_GAMMA, 2.2f)
+                        builder.set(CaptureRequest.TONEMAP_GAMMA, gamma)
                     } else if (mode == CaptureRequest.TONEMAP_MODE_PRESET_CURVE) {
                         builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
                     }
@@ -222,6 +236,9 @@ internal class LabSourceProbe(
                 json("errorClass" to t.javaClass.name, "error" to t.message?.take(300))
             }
             armObj.put("armName", name).put("requestedToneMapMode", mode)
+            if (mode == CaptureRequest.TONEMAP_MODE_GAMMA_VALUE) {
+                armObj.put("requestedGamma", gamma.toDouble())
+            }
             if (armObj.optInt("observedToneMapMode", -1) == mode && armObj.optInt("framesCaptured") > 0) {
                 empiricalToneModes += mode
             }
@@ -253,8 +270,10 @@ internal class LabSourceProbe(
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
         lease.ready().get(8, TimeUnit.SECONDS)
         val manager = context.getSystemService(CameraManager::class.java)
+        val caps = runCatching { manager.getCameraCharacteristics(cameraId) }.getOrNull()
         val thread = HandlerThread("occ-cc-probe").apply { start() }
         val handler = Handler(thread.looper)
+        awaitCameraAvailable(manager, cameraId, handler)
         val reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 3)
         val opened = CompletableFuture<CameraDevice>()
         val closed = CompletableFuture<Unit>()
@@ -263,6 +282,12 @@ internal class LabSourceProbe(
         val samples = ArrayList<IntArray>()
         val observedCc = AtomicReference<Int?>()
         val observedTm = AtomicReference<Int?>()
+        val observedAeLock = AtomicReference<Boolean?>()
+        val observedAwbLock = AtomicReference<Boolean?>()
+        val observedExpNs = AtomicReference<Long?>()
+        val observedIso = AtomicReference<Int?>()
+        val aeLockSupported = caps?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+        val awbLockSupported = caps?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
         val captureDone = CompletableFuture<Unit>()
 
         reader.setOnImageAvailableListener({ r ->
@@ -310,12 +335,18 @@ internal class LabSourceProbe(
             val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(reader.surface)
                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                if (aeLockSupported) set(CaptureRequest.CONTROL_AE_LOCK, true)
+                if (awbLockSupported) set(CaptureRequest.CONTROL_AWB_LOCK, true)
                 configure(this)
             }.build()
             session.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
                     observedCc.compareAndSet(null, res.get(CaptureResult.COLOR_CORRECTION_MODE))
                     observedTm.compareAndSet(null, res.get(CaptureResult.TONEMAP_MODE))
+                    observedAeLock.compareAndSet(null, res.get(CaptureResult.CONTROL_AE_LOCK))
+                    observedAwbLock.compareAndSet(null, res.get(CaptureResult.CONTROL_AWB_LOCK))
+                    observedExpNs.compareAndSet(null, res.get(CaptureResult.SENSOR_EXPOSURE_TIME))
+                    observedIso.compareAndSet(null, res.get(CaptureResult.SENSOR_SENSITIVITY))
                 }
             }, handler)
             runCatching { captureDone.get(5, TimeUnit.SECONDS) }
@@ -343,46 +374,80 @@ internal class LabSourceProbe(
             "framesCaptured" to samples.size,
             "observedColorCorrectionMode" to observedCc.get(),
             "observedToneMapMode" to observedTm.get(),
+            "aeLockSupported" to aeLockSupported,
+            "awbLockSupported" to awbLockSupported,
+            "observedAeLocked" to observedAeLock.get(),
+            "observedAwbLocked" to observedAwbLock.get(),
+            "observedExposureTimeNs" to observedExpNs.get(),
+            "observedIso" to observedIso.get(),
             "metrics" to metrics.toJson(),
         )
     }
 
     @SuppressLint("MissingPermission")
     private fun runToneMapAb(case: LabCase, attempt: LabJournal.Attempt): Pair<LabVerdict, String?> {
-        val armA = captureYuvBurst(case.camera, case.width, case.height, case.fps, flatToneMap = false)
+        val armA = captureYuvBurst(case.camera, case.width, case.height, case.fps, flatToneMap = false, rolloffCurve = false)
         attempt.notice(json("event" to "isp_tonemap_arm", "arm" to "DEFAULT", "details" to armA))
         checkBudget()
-        val armB = captureYuvBurst(case.camera, case.width, case.height, case.fps, flatToneMap = true)
+        val lockedExp = armA.optLong("observedExposureTimeNs", 0L).takeIf { it > 0L }
+        val lockedIso = armA.optInt("observedIso", 0).takeIf { it > 0 }
+        val armB = captureYuvBurst(
+            case.camera, case.width, case.height, case.fps,
+            flatToneMap = true, rolloffCurve = false, lockedExpNs = lockedExp, lockedIso = lockedIso,
+        )
         attempt.notice(json("event" to "isp_tonemap_arm", "arm" to "FLAT_CONTRAST_CURVE", "details" to armB))
+        checkBudget()
+        val armC = captureYuvBurst(
+            case.camera, case.width, case.height, case.fps,
+            flatToneMap = false, rolloffCurve = true, lockedExpNs = lockedExp, lockedIso = lockedIso,
+        )
+        attempt.notice(json("event" to "isp_tonemap_arm", "arm" to "SAFE_LINEAR_ROLLOFF", "details" to armC))
 
         val aMetrics = armA.opt("metricsObj") as? LumaHistogramMetrics
         val bMetrics = armB.opt("metricsObj") as? LumaHistogramMetrics
+        val cMetrics = armC.opt("metricsObj") as? LumaHistogramMetrics
         val verdictLabel = if (aMetrics != null && bMetrics != null) {
             classifyToneMapComparison(aMetrics, bMetrics, armB.optBoolean("curveAppliedAndObserved", false))
+        } else "CAPTURE_FAILED"
+        val rolloffLabel = if (aMetrics != null && cMetrics != null) {
+            classifyToneMapComparison(aMetrics, cMetrics, armC.optBoolean("curveAppliedAndObserved", false))
         } else "CAPTURE_FAILED"
         val summary = json(
             "event" to "isp_tonemap_ab_summary",
             "comparisonVerdict" to verdictLabel,
+            "rolloffVerdict" to rolloffLabel,
+            "exposureLockedFromArmA" to (lockedExp != null && lockedIso != null),
             "defaultArm" to armA.optJSONObject("metricsJson"),
             "flatArm" to armB.optJSONObject("metricsJson"),
+            "rolloffArm" to armC.optJSONObject("metricsJson"),
             "flatObservedToneMapMode" to armB.opt("observedToneMapMode"),
         )
         attempt.event(LabStage.FILE, summary)
         return if (aMetrics != null && bMetrics != null) {
-            LabVerdict.OBSERVED to "ISP ToneMap A/B completed: $verdictLabel"
+            LabVerdict.OBSERVED to "ISP ToneMap A/B/C completed: flat=$verdictLabel, rolloff=$rolloffLabel"
         } else {
             LabVerdict.FAILED to "ISP ToneMap A/B failed to decode YUV frames."
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun captureYuvBurst(cameraId: String, width: Int, height: Int, fps: Int, flatToneMap: Boolean): JSONObject {
+    private fun captureYuvBurst(
+        cameraId: String,
+        width: Int,
+        height: Int,
+        fps: Int,
+        flatToneMap: Boolean,
+        rolloffCurve: Boolean = false,
+        lockedExpNs: Long? = null,
+        lockedIso: Int? = null,
+    ): JSONObject {
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
         lease.ready().get(8, TimeUnit.SECONDS)
         val manager = context.getSystemService(CameraManager::class.java)
-        val caps = manager.getCameraCharacteristics(cameraId)
+        val caps = runCatching { manager.getCameraCharacteristics(cameraId) }.getOrNull()
         val thread = HandlerThread("occ-tonemap-probe").apply { start() }
         val handler = Handler(thread.looper)
+        awaitCameraAvailable(manager, cameraId, handler)
         val reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 4)
         val opened = CompletableFuture<CameraDevice>()
         val closed = CompletableFuture<Unit>()
@@ -390,6 +455,12 @@ internal class LabSourceProbe(
         val retiring = AtomicBoolean()
         val samples = ArrayList<IntArray>()
         val observedToneMap = AtomicReference<Int?>()
+        val observedExpNs = AtomicReference<Long?>()
+        val observedIso = AtomicReference<Int?>()
+        val observedAeLock = AtomicReference<Boolean?>()
+        val observedAwbLock = AtomicReference<Boolean?>()
+        val aeLockSupported = caps?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+        val awbLockSupported = caps?.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
         val captureDone = CompletableFuture<Unit>()
 
         reader.setOnImageAvailableListener({ r ->
@@ -406,6 +477,7 @@ internal class LabSourceProbe(
         var session: CameraCaptureSession? = null
         var openSubmitted = false
         var curveApplied = false
+        var manualExposureApplied = false
         try {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
@@ -438,21 +510,39 @@ internal class LabSourceProbe(
             val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(reader.surface)
                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
-                if (flatToneMap) {
-                    val modes = caps.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
-                    val maxPts = caps.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS) ?: 0
+                if (lockedExpNs != null && lockedIso != null) {
+                    val aeModes = caps?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)?.toSet().orEmpty()
+                    if (CaptureRequest.CONTROL_AE_MODE_OFF in aeModes) {
+                        set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                        set(CaptureRequest.SENSOR_EXPOSURE_TIME, lockedExpNs)
+                        set(CaptureRequest.SENSOR_SENSITIVITY, lockedIso)
+                        manualExposureApplied = true
+                    } else if (aeLockSupported) {
+                        set(CaptureRequest.CONTROL_AE_LOCK, true)
+                    }
+                } else if (aeLockSupported) {
+                    set(CaptureRequest.CONTROL_AE_LOCK, true)
+                }
+                if (awbLockSupported) set(CaptureRequest.CONTROL_AWB_LOCK, true)
+                if (flatToneMap || rolloffCurve) {
+                    val modes = caps?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
+                    val maxPts = caps?.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS) ?: 0
                     if (CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE in modes && maxPts >= PictureProfileCurves.MIN_POINT_COUNT) {
-                        val pts = PictureProfileCurves.points(PictureProfile.FLAT, minOf(PictureProfileCurves.DEFAULT_POINT_COUNT, maxPts))
+                        val pts = if (rolloffCurve) {
+                            safeLinearRolloffCurve(minOf(32, maxPts))
+                        } else {
+                            PictureProfileCurves.points(PictureProfile.FLAT, minOf(PictureProfileCurves.DEFAULT_POINT_COUNT, maxPts))
+                        }
                         if (pts != null) {
                             set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
                             set(CaptureRequest.TONEMAP_CURVE, TonemapCurve(pts, pts, pts))
                             curveApplied = true
                         }
                     }
-                    if (caps.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.contains(CaptureRequest.EDGE_MODE_OFF) == true) {
+                    if (caps?.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.contains(CaptureRequest.EDGE_MODE_OFF) == true) {
                         set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
                     }
-                    if (caps.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)?.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF) == true) {
+                    if (caps?.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)?.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF) == true) {
                         set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
                     }
                 }
@@ -460,6 +550,10 @@ internal class LabSourceProbe(
             session.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
                     observedToneMap.compareAndSet(null, res.get(CaptureResult.TONEMAP_MODE))
+                    observedExpNs.compareAndSet(null, res.get(CaptureResult.SENSOR_EXPOSURE_TIME))
+                    observedIso.compareAndSet(null, res.get(CaptureResult.SENSOR_SENSITIVITY))
+                    observedAeLock.compareAndSet(null, res.get(CaptureResult.CONTROL_AE_LOCK))
+                    observedAwbLock.compareAndSet(null, res.get(CaptureResult.CONTROL_AWB_LOCK))
                 }
             }, handler)
             runCatching { captureDone.get(6, TimeUnit.SECONDS) }
@@ -489,6 +583,13 @@ internal class LabSourceProbe(
             put("curveRequested", curveApplied)
             put("observedToneMapMode", observedToneMap.get())
             put("curveAppliedAndObserved", curveObserved)
+            put("manualExposureApplied", manualExposureApplied)
+            put("aeLockSupported", aeLockSupported)
+            put("awbLockSupported", awbLockSupported)
+            put("observedAeLocked", observedAeLock.get())
+            put("observedAwbLocked", observedAwbLock.get())
+            put("observedExposureTimeNs", observedExpNs.get())
+            put("observedIso", observedIso.get())
             put("framesCaptured", samples.size)
             put("metricsJson", metrics.toJson())
             put("metricsObj", metrics)
@@ -570,10 +671,29 @@ internal class LabSourceProbe(
             "anyHighPrecisionSourceAdmitted" to anyHighPrecision,
         )
         attempt.event(LabStage.FILE, summary)
+        if (cameraReports.length() == 0) {
+            return LabVerdict.FAILED to "No accessible cameras responded during source format probe."
+        }
         return LabVerdict.OBSERVED to if (anyHighPrecision) {
             "High-precision non-YUV_420_888 source stream admitted on hardware."
         } else {
             "Source format probe completed: only public YUV_420_888 / PRIVATE admitted."
+        }
+    }
+
+    private fun awaitCameraAvailable(manager: CameraManager, cameraId: String, handler: Handler, timeoutMs: Long = 6_000L) {
+        if (runCatching { manager.cameraIdList }.getOrNull()?.contains(cameraId) == true) return
+        val ready = CompletableFuture<Unit>()
+        val cb = object : CameraManager.AvailabilityCallback() {
+            override fun onCameraAvailable(id: String) {
+                if (id == cameraId) ready.complete(Unit)
+            }
+        }
+        runCatching { manager.registerAvailabilityCallback(cb, handler) }
+        try {
+            runCatching { ready.get(timeoutMs, TimeUnit.MILLISECONDS) }
+        } finally {
+            runCatching { manager.unregisterAvailabilityCallback(cb) }
         }
     }
 
@@ -695,4 +815,26 @@ internal class LabSourceProbe(
         }
         return out
     }
+}
+
+/**
+ * Generates an alternating monotonic (x, y) tone-curve with a near-linear midtone slope
+ * and a logarithmic highlight shoulder rolloff (preserving highlights up to ~0.92 instead of clipping).
+ */
+internal fun safeLinearRolloffCurve(pointsCount: Int): FloatArray? {
+    if (pointsCount < PictureProfileCurves.MIN_POINT_COUNT) return null
+    val out = FloatArray(pointsCount * 2)
+    for (i in 0 until pointsCount) {
+        val x = i.toFloat() / (pointsCount - 1).toFloat()
+        val y = if (x <= 0.45f) {
+            (x * 0.90f).coerceIn(0f, 1f)
+        } else {
+            val t = ((x - 0.45f) / 0.55f).coerceIn(0f, 1f)
+            val shoulder = kotlin.math.ln(1.0 + 4.0 * t) / kotlin.math.ln(5.0)
+            (0.405f + 0.545f * shoulder.toFloat()).coerceIn(0f, 1f)
+        }
+        out[i * 2] = x
+        out[i * 2 + 1] = y
+    }
+    return out
 }

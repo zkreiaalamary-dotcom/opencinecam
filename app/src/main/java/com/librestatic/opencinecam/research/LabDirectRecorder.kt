@@ -48,7 +48,10 @@ internal class LabDirectRecorder(private val context: Context, private val check
         val manager = context.getSystemService(CameraManager::class.java)
         val caps = manager.getCameraCharacteristics(case.camera)
         val useImageReaderPreview = case.path == LabPath.DIRECT_HEVC_PREVIEW
-        val useSurfaceTexturePreview = case.path == LabPath.DIRECT_HEVC_SURFACETEXTURE
+        val useSurfaceTexturePreview = case.path == LabPath.DIRECT_HEVC_SURFACETEXTURE ||
+            case.path == LabPath.DIRECT_HEVC_SURFACETEXTURE_360P
+        val previewWidth = if (case.path == LabPath.DIRECT_HEVC_SURFACETEXTURE_360P) 640 else 1280
+        val previewHeight = if (case.path == LabPath.DIRECT_HEVC_SURFACETEXTURE_360P) 360 else 720
         val twoOutputs = useImageReaderPreview || useSurfaceTexturePreview
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
         try {
@@ -96,7 +99,7 @@ internal class LabDirectRecorder(private val context: Context, private val check
                 "durationMs" to durationMs,
                 "preview" to when {
                     useImageReaderPreview -> "1280x720 PRIVATE ImageReader"
-                    useSurfaceTexturePreview -> "1280x720 live SurfaceTexture"
+                    useSurfaceTexturePreview -> "${previewWidth}x${previewHeight} live SurfaceTexture"
                     else -> null
                 }))
             stage("recorder_prepare")
@@ -147,7 +150,7 @@ internal class LabDirectRecorder(private val context: Context, private val check
                         GLES30.glGenTextures(1, ids, 0)
                         stTexId = ids[0]
                         GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stTexId)
-                        val st = SurfaceTexture(stTexId).apply { setDefaultBufferSize(1280, 720) }
+                        val st = SurfaceTexture(stTexId).apply { setDefaultBufferSize(previewWidth, previewHeight) }
                         st.setOnFrameAvailableListener({ tex ->
                             if (!retiring.get()) {
                                 runCatching {

@@ -65,6 +65,24 @@ object HevcEncoderLevels {
             ?: advertisedLevels.maxOrNull()
     }
 
+    /**
+     * Profile-aware level selector for encoders whose advertised levels differ per profile
+     * (e.g., Kirin/HiSilicon OMX where HEVCProfileMain10 advertises only MainTierLevel62).
+     */
+    fun selectHevcLevelForProfile(
+        profile: Int,
+        width: Int,
+        height: Int,
+        fps: Int,
+        profileLevels: Collection<EncoderProfileLevel>,
+    ): Int? {
+        val forProfile = profileLevels.filter { it.profile == profile }.map { it.level }
+        if (forProfile.isNotEmpty()) {
+            return selectHevcLevel(width, height, fps, forProfile)
+        }
+        return selectHevcLevel(width, height, fps, profileLevels.map { it.level })
+    }
+
     fun hevcLevelName(level: Int?): String = when (level) {
         null -> "NONE"
         CodecProfileLevel.HEVCMainTierLevel31 -> "MainTierLevel31"

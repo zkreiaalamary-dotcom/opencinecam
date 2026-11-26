@@ -117,6 +117,7 @@ class SurfaceEncoderCaps(
     val colorFormats: List<Int>,
     val profileLevels: List<EncoderProfileLevel>,
     val sizeAndRateSupported: ((width: Int, height: Int, fps: Double) -> Boolean)?,
+    val bitrateRangeUpperBps: Int? = null,
 )
 
 /** Platform-free view of one MediaCodecInfo; [capabilities] may throw, like getCapabilitiesForType. */
@@ -134,6 +135,7 @@ data class SurfaceEncoderPick(
     val profile: Int,
     val hardwareAccelerated: Boolean,
     val level: Int?,
+    val maxBitrateBps: Int? = null,
 )
 
 fun MediaCodecInfo.asSurfaceEncoderInfo(): SurfaceEncoderInfo = SurfaceEncoderInfo(
@@ -149,6 +151,7 @@ fun MediaCodecInfo.asSurfaceEncoderInfo(): SurfaceEncoderInfo = SurfaceEncoderIn
             colorFormats = caps.colorFormats.toList(),
             profileLevels = caps.profileLevels.map { EncoderProfileLevel(it.profile, it.level) },
             sizeAndRateSupported = video?.let { v -> { w, h, fps -> v.areSizeAndRateSupported(w, h, fps) } },
+            bitrateRangeUpperBps = video?.bitrateRange?.upper,
         )
     },
 )
@@ -191,11 +194,15 @@ class VideoEncoderSelector(private val correlationId: String = "video-encoder") 
                     profiles.firstOrNull { it == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh } ?: profiles.maxOrNull()
             } ?: return@mapNotNull null
             if (caps.sizeAndRateSupported?.invoke(width, height, fps.toDouble()) != true) return@mapNotNull null
+            val profileLevelsForSelected = caps.profileLevels.filter { it.profile == profile }.map { it.level }
             SurfaceEncoderPick(
-                info.name, profile, info.hardwareAccelerated,
-                if (policy.profile == EncoderProfileRule.AVC_HIGH_ELSE_HIGHEST) {
-                    caps.profileLevels.filter { it.profile == profile }.maxOf { it.level }
+                codecName = info.name,
+                profile = profile,
+                hardwareAccelerated = info.hardwareAccelerated,
+                level = if (policy.profile == EncoderProfileRule.AVC_HIGH_ELSE_HIGHEST) {
+                    profileLevelsForSelected.maxOrNull()
                 } else null,
+                maxBitrateBps = caps.bitrateRangeUpperBps,
             )
         }
         .firstOrNull()

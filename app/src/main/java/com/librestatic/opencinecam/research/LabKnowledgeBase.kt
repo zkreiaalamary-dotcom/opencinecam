@@ -166,7 +166,8 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         val chosen = exact ?: fallback ?: return null
         val adjusted = chosen.toResearchOverride(allowAvcFallback = false)
         return if (fps >= 60 && width >= 3840) {
-            adjusted.copy(explicitHevcLevel = adjusted.explicitHevcLevel ?: CodecProfileLevel.HEVCMainTierLevel52)
+            val fallbackLevel = if (main10) CodecProfileLevel.HEVCMainTierLevel62 else CodecProfileLevel.HEVCMainTierLevel52
+            adjusted.copy(explicitHevcLevel = adjusted.explicitHevcLevel ?: fallbackLevel)
         } else {
             adjusted
         }
@@ -247,7 +248,7 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
                 sdkInt = errEv.optInt("sdkInt", android.os.Build.VERSION.SDK_INT),
             )
         }
-        val baseKey = "${case.camera}/${case.path.name}/${case.width}x${case.height}/${case.fps}/${case.hfr}/${case.longer}/${case.flatToneMap}"
+        val baseKey = "${case.camera}/${case.path.name}/${case.width}x${case.height}/${case.fps}/${case.hfr}/${case.longer}/${case.previewOnly}/${case.flatToneMap}/${case.variant}"
         val prior = caseVerdicts.getOrPut(baseKey) { mutableListOf() }
         if (prior.isNotEmpty()) {
             val prev = prior.first()
@@ -268,7 +269,7 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
             LabPath.CODEC_SYNTHETIC_MATRIX -> ingestSyntheticMatrix(attemptId, verdict, events)
             LabPath.LOG_REGULAR_4K30, LabPath.LOG_REGULAR_4K60 -> ingestRegularLog(attemptId, case, verdict, reason, events)
             LabPath.GPU_HEVC_4K30, LabPath.GPU_HEVC_4K60 -> ingestGpuHevc(attemptId, case, verdict, reason, events)
-            LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
+            LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE, LabPath.DIRECT_HEVC_SURFACETEXTURE_360P ->
                 ingestDirect4k60(attemptId, case, verdict, reason, events)
             LabPath.ISP_TONEMAP_AB -> ingestToneMapAb(attemptId, verdict, events)
             LabPath.ISP_COLOR_CORRECTION_PROBE -> ingestColorCorrectionProbe(attemptId, verdict, events)
@@ -280,7 +281,9 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
     }
 
     private fun ingestCodecLevelPair(attemptId: String, verdict: LabVerdict, events: List<JSONObject>) {
-        val pairs = events.filter { it.optString("event") == "codec_level_probe" }
+        val pairs = events.filter {
+            it.optString("event") == "codec_arm_result" || it.optString("event") == "codec_level_probe"
+        }
         val withoutLevel = pairs.firstOrNull { it.isNull("level") }?.optBoolean("admitted", false)
         val withLevel = pairs.firstOrNull { !it.isNull("level") }?.optBoolean("admitted", false)
         val status = when {
@@ -326,7 +329,12 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
                 recipes += recipe
             }
         }
+        val allZeroEncodedSamples = arms.isNotEmpty() &&
+            main10Ok.isEmpty() &&
+            cleanMain8.isEmpty() &&
+            arms.all { it.optInt("encodedSamples", 0) == 0 }
         val h2Status = when {
+            allZeroEncodedSamples -> HypothesisStatus.INCONCLUSIVE
             distortedMain10 && cleanMain10.isEmpty() -> HypothesisStatus.REFUTED
             distortedMain10 && cleanMain10.isNotEmpty() -> HypothesisStatus.CONTRADICTED
             cleanMain10.isNotEmpty() -> HypothesisStatus.CONFIRMED

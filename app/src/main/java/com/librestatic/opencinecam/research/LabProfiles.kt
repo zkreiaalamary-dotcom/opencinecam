@@ -64,7 +64,12 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
             }
             if (uhdInTexture && (fixed60 || descriptor.targetFpsRanges.any { 60 in it.lower..it.upper })) {
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "egl8"))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "novui"))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "scopes_pbo"))
                 add(LabCase(id, LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false))
+                add(LabCase(id, LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false, variant = "novui"))
+                add(LabCase(id, LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false, variant = "scopes_pbo"))
             }
             add(LabCase(id, LabPath.SOURCE_FORMAT_PROBE, 3840, 2160, 30, listed = false))
             if (Size(3840, 2160) in recorderSizes && fixed60) {
@@ -74,6 +79,8 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
                 if (Size(1280, 720) in textureSizes) {
                     add(direct.copy(path = LabPath.DIRECT_HEVC_SURFACETEXTURE))
                     add(direct.copy(path = LabPath.DIRECT_HEVC_SURFACETEXTURE, longer = true))
+                    add(direct.copy(path = LabPath.DIRECT_HEVC_SURFACETEXTURE_360P))
+                    add(direct.copy(path = LabPath.DIRECT_HEVC_SURFACETEXTURE_360P, longer = true))
                 }
                 add(direct.copy(longer = true))
             }

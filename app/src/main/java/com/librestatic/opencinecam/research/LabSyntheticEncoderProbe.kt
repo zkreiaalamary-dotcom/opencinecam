@@ -60,24 +60,34 @@ internal object LabSyntheticEncoderProbe {
     fun run(attempt: LabJournal.Attempt, checkBudget: () -> Unit): Pair<LabVerdict, String?> {
         val hevcEncoder = findBestHardwareHevcEncoder()
             ?: return LabVerdict.FAILED to "No hardware HEVC Surface encoder advertised."
-        val advertisedLevels = hevcEncoder.second.filter {
-            it.profile == CodecProfileLevel.HEVCProfileMain || it.profile == CodecProfileLevel.HEVCProfileMain10
-        }.map { it.level }.toSet()
-        val level4k30 = HevcEncoderLevels.selectHevcLevel(3840, 2160, 30, advertisedLevels)
-            ?: CodecProfileLevel.HEVCMainTierLevel51
-        val level4k60 = HevcEncoderLevels.selectHevcLevel(3840, 2160, 60, advertisedLevels)
-            ?: CodecProfileLevel.HEVCMainTierLevel52
+        val profileLevels = hevcEncoder.second.map {
+            com.librestatic.opencinecam.media.video.EncoderProfileLevel(it.profile, it.level)
+        }
+        val main8Level4k30 = HevcEncoderLevels.selectHevcLevelForProfile(
+            CodecProfileLevel.HEVCProfileMain, 3840, 2160, 30, profileLevels,
+        ) ?: CodecProfileLevel.HEVCMainTierLevel51
+        val main10Level4k30 = HevcEncoderLevels.selectHevcLevelForProfile(
+            CodecProfileLevel.HEVCProfileMain10, 3840, 2160, 30, profileLevels,
+        ) ?: CodecProfileLevel.HEVCMainTierLevel62
+        val main10Level4k60 = HevcEncoderLevels.selectHevcLevelForProfile(
+            CodecProfileLevel.HEVCProfileMain10, 3840, 2160, 60, profileLevels,
+        ) ?: CodecProfileLevel.HEVCMainTierLevel62
+        val main8Level4k60 = HevcEncoderLevels.selectHevcLevelForProfile(
+            CodecProfileLevel.HEVCProfileMain, 3840, 2160, 60, profileLevels,
+        ) ?: CodecProfileLevel.HEVCMainTierLevel52
 
         val arms = mutableListOf(
             LabSyntheticArm("main8_no_level_4k30", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain, null, 20_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = false, frameCount = 15),
-            LabSyntheticArm("main8_l51_4k30_egl8", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain, level4k30, 20_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = false, frameCount = 30),
+            LabSyntheticArm("main8_l51_4k30_egl8", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain, main8Level4k30, 20_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = false, frameCount = 30),
             LabSyntheticArm("main10_no_level_4k30_egl10", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, null, 40_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = true, frameCount = 15),
-            LabSyntheticArm("main10_l51_bt709_lim_4k30_egl10", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = true, frameCount = 30),
-            LabSyntheticArm("main10_l51_oclog2_full_4k30_egl10_linear", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = true, eglColorSpace = EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
-            LabSyntheticArm("main10_l51_oclog2_full_4k30_egl10_default", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
-            LabSyntheticArm("main10_l51_oclog2_lim_4k30_egl10_default", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_LIMITED, null, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
-            LabSyntheticArm("main10_l51_hlg_lim_4k30_egl10", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_HLG, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
-            LabSyntheticArm("main10_l51_bt709_lim_4k30_egl8", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = false, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_bt709_lim_4k30_egl10", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = true, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_oclog2_full_4k30_egl10_linear", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = true, eglColorSpace = EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_oclog2_full_4k30_egl10_novui", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = true, eglColorSpace = EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, applyOcLog2Shader = true, rewriteVuiUnspecified = false, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_oclog2_full_4k30_egl10_default", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_oclog2_lim_4k30_egl10_default", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_LIMITED, null, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_hlg_lim_4k30_egl10", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_HLG, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_bt709_lim_4k30_egl8", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = false, frameCount = 30),
+            LabSyntheticArm("main10_prof_level_oclog2_full_4k30_egl8", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = false, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
         )
 
         val armResults = mutableListOf<JSONObject>()
@@ -92,10 +102,13 @@ internal object LabSyntheticEncoderProbe {
         fun runArmAndRecord(arm: LabSyntheticArm): JSONObject {
             checkBudget()
             val outFile = File(attempt.clip.parentFile, "synthetic_${arm.id}.mp4")
+            scratchFiles += arm.id to outFile
             val result = executeArm(hevcEncoder.first, arm, outFile)
             armResults += result
             attempt.event(LabStage.RECORDER, result)
-            if (outFile.isFile && outFile.length() > 0L) scratchFiles += arm.id to outFile
+            if (!outFile.isFile || outFile.length() == 0L) {
+                runCatching { outFile.delete() }
+            }
             return result
         }
 
@@ -125,19 +138,25 @@ internal object LabSyntheticEncoderProbe {
             val template4k60Main10 = (bestMain10Arm4k30 ?: arms[4]).copy(
                 id = "main10_4k60_best",
                 fps = 60,
-                level = level4k60,
+                level = main10Level4k60,
                 bitrateBps = 60_000_000,
                 frameCount = 30,
             )
             val res4k60Main10 = runArmAndRecord(template4k60Main10)
-            if (!res4k60Main10.optBoolean("encodedOk", false) && level4k60 != CodecProfileLevel.HEVCMainTierLevel52) {
-                runArmAndRecord(template4k60Main10.copy(id = "main10_l52_4k60_fallback", level = CodecProfileLevel.HEVCMainTierLevel52))
+            if (!res4k60Main10.optBoolean("encodedOk", false) && main10Level4k60 != CodecProfileLevel.HEVCMainTierLevel62) {
+                runArmAndRecord(template4k60Main10.copy(id = "main10_l62_4k60_fallback", level = CodecProfileLevel.HEVCMainTierLevel62))
+            }
+            if (!res4k60Main10.optBoolean("encodedOk", false) && !template4k60Main10.egl10Bit) {
+                // Already 8-bit; also try explicit Main10 Level 6.2 without VUI rewrite
+                runArmAndRecord(template4k60Main10.copy(id = "main10_4k60_novui", rewriteVuiUnspecified = false))
+            } else if (!res4k60Main10.optBoolean("encodedOk", false)) {
+                runArmAndRecord(template4k60Main10.copy(id = "main10_4k60_egl8", egl10Bit = false, eglColorSpace = null))
             }
             val main84k60 = LabSyntheticArm(
-                id = "main8_l51_4k60_egl8",
+                id = "main8_l52_4k60_egl8",
                 width = 3840, height = 2160, fps = 60,
                 profile = CodecProfileLevel.HEVCProfileMain,
-                level = level4k60,
+                level = main8Level4k60,
                 bitrateBps = 60_000_000,
                 colorStandard = MediaFormat.COLOR_STANDARD_BT709,
                 colorRange = MediaFormat.COLOR_RANGE_LIMITED,
@@ -255,7 +274,10 @@ internal object LabSyntheticEncoderProbe {
         var step = "create"
         var started = false
         var muxerStarted = false
+        var outputFormatChanged = false
+        var framesSwapped = 0
         var encodedSamples = 0
+        var outputFormatStr: String? = null
         var csd0Bytes: ByteArray? = null
         var encoderVuiPrev: Int? = null
         var containerVuiAfter: Int? = null
@@ -305,7 +327,9 @@ internal object LabSyntheticEncoderProbe {
                         val idx = encoder.dequeueOutputBuffer(info, 20_000)
                         when {
                             idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                                outputFormatChanged = true
                                 val outFmt = encoder.outputFormat
+                                outputFormatStr = outFmt.toString()
                                 if (arm.rewriteVuiUnspecified) {
                                     outFmt.getByteBuffer("csd-0")?.duplicate()?.let { buf ->
                                         val bytes = ByteArray(buf.remaining()).also { buf.get(it) }
@@ -364,6 +388,7 @@ internal object LabSyntheticEncoderProbe {
                 GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
                 EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, i * frameStepNs)
                 check(EGL14.eglSwapBuffers(eglDisplay, eglSurface)) { "eglSwapBuffers failed at frame $i" }
+                framesSwapped++
             }
             GLES30.glDisableVertexAttribArray(0)
             GLES30.glDeleteProgram(program)
@@ -385,6 +410,9 @@ internal object LabSyntheticEncoderProbe {
             )
             result.put("encodedOk", encodedSamples >= 2)
             result.put("step", "done")
+            result.put("framesSwapped", framesSwapped)
+            result.put("outputFormatChanged", outputFormatChanged)
+            result.put("outputFormat", outputFormatStr)
             result.put("encodedSamples", encodedSamples)
             result.put("clipBytes", outputFile.length())
             result.put("encoderVuiTransferPrev", encoderVuiPrev)
@@ -410,7 +438,11 @@ internal object LabSyntheticEncoderProbe {
         } catch (error: Throwable) {
             result.put("encodedOk", false)
             result.put("step", step)
+            result.put("framesSwapped", framesSwapped)
+            result.put("outputFormatChanged", outputFormatChanged)
+            result.put("encodedSamples", encodedSamples)
             result.put("failure", error.toCodecFailure())
+            if (outputFile.isFile && outputFile.length() == 0L) runCatching { outputFile.delete() }
         } finally {
             runCatching {
                 if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
@@ -488,7 +520,7 @@ internal object LabSyntheticEncoderProbe {
         return p
     }
 
-    private const val SYNTHETIC_VERTEX_SHADER = """
+    private val SYNTHETIC_VERTEX_SHADER = """
         #version 300 es
         layout(location = 0) in vec2 aPos;
         out vec2 vUv;
@@ -496,11 +528,11 @@ internal object LabSyntheticEncoderProbe {
             gl_Position = vec4(aPos, 0.0, 1.0);
             vUv = (aPos + 1.0) * 0.5;
         }
-    """
+    """.trimIndent()
 
     // Generates a 4-quadrant asymmetric pattern with a smooth ramp (Q1 top-right) and
     // per-frame moving bar + binary frame stripes (Q3 bottom-right).
-    private const val SYNTHETIC_FRAGMENT_SHADER = """
+    private val SYNTHETIC_FRAGMENT_SHADER = """
         #version 300 es
         precision highp float;
         uniform float uFrameIndex;
@@ -549,5 +581,5 @@ internal object LabSyntheticEncoderProbe {
             }
             outColor = vec4(uApplyOcLog2 == 1 ? encodeOcLog2(rgb) : rgb, 1.0);
         }
-    """
+    """.trimIndent()
 }

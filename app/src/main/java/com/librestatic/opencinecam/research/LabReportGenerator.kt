@@ -21,8 +21,9 @@ internal object LabReportGenerator {
         stopReason: String? = null,
     ): File {
         val telemetryStats = summarizeTelemetry(File(journalDir, "telemetry.jsonl"))
+        val storageUsage = LabStorageManager.measureUsage(journalDir)
         val jsonReport = json(
-            "schema" to "opencinecam.research.report/v1",
+            "schema" to "opencinecam.research.report/v2",
             "selectedCamera" to inventory?.optString("selectedCamera"),
             "hlg10Advertised" to knowledge.hlg10Advertised,
             "cameraKitPresent" to knowledge.cameraKitPresent,
@@ -37,6 +38,15 @@ internal object LabReportGenerator {
             "colorCorrectionEmpiricalVerdict" to knowledge.colorCorrectionEmpiricalVerdict,
             "highPrecisionSourceAdmitted" to knowledge.highPrecisionSourceAdmitted,
             "stopReason" to stopReason,
+            "storage" to json(
+                "totalBytes" to storageUsage.totalBytes,
+                "mediaBytes" to storageUsage.mediaBytes,
+                "metadataBytes" to storageUsage.metadataBytes,
+                "fileCount" to storageUsage.fileCount,
+                "freeBytes" to storageUsage.freeBytes,
+                "reserveBytes" to storageUsage.reserveBytes,
+                "hasVerifiedExport" to storageUsage.hasVerifiedExport,
+            ),
             "telemetry" to telemetryStats,
             "knowledge" to knowledge.toJson(),
             "attempts" to JSONArray(history.map {
@@ -52,6 +62,7 @@ internal object LabReportGenerator {
             appendLine("- **Public HLG10 advertised:** `${knowledge.hlg10Advertised}`")
             appendLine("- **Huawei CameraKit present (read-only check):** `${knowledge.cameraKitPresent}`")
             appendLine("- **Attempts recorded:** `${history.size}` (`OBSERVED`: ${history.count { it.verdict == LabVerdict.OBSERVED }})")
+            appendLine("- **Evidence storage:** `${LabStorageManager.formatBytes(storageUsage.totalBytes)}` (media `${LabStorageManager.formatBytes(storageUsage.mediaBytes)}`, logs `${LabStorageManager.formatBytes(storageUsage.metadataBytes)}`, free `${LabStorageManager.formatBytes(storageUsage.freeBytes)}`)")
             if (!stopReason.isNullOrBlank()) appendLine("- **Run state:** $stopReason")
             appendLine()
             appendLine("## Provenance & Best Verified Recipes")

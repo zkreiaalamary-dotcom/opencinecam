@@ -54,27 +54,51 @@ internal class LabAutonomousPlanner(
         val synth60AnyOk = knowledge.recipes.any { it.fps >= 60 }
         if (log30Ok || synth60Main10Ok) {
             candidates.firstOrNull {
-                it.path == LabPath.LOG_REGULAR_4K60 && !it.longer && !it.previewOnly && it.key !in seen
+                it.path == LabPath.LOG_REGULAR_4K60 && !it.longer && !it.previewOnly && it.variant.isBlank() && it.key !in seen
             }?.let { log60 ->
                 return LabDecision(log60, log4k30Result?.id, "Stage C (H-05): escalate 4K30 success to 4K60 regular-session OCLog2.")
             }
         }
+        val log60BaseResult = history.lastOrNull {
+            it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && it.attempt.variant.isBlank()
+        }
+        if (log60BaseResult != null && log60BaseResult.verdict != LabVerdict.OBSERVED) {
+            for ((variantKey, hypDesc) in listOf(
+                "egl8" to "Stage C (H-05): isolate 8-bit EGL target vs Main10 codec on 4K60 OCLog2.",
+                "novui" to "Stage C (H-05): isolate H.265 SPS VUI rewriting on 4K60 OCLog2.",
+            )) {
+                candidates.firstOrNull {
+                    it.path == LabPath.LOG_REGULAR_4K60 && !it.longer && !it.previewOnly && it.variant == variantKey && it.key !in seen
+                }?.let { variantCase ->
+                    return LabDecision(variantCase, log60BaseResult.id, hypDesc)
+                }
+            }
+        }
         val log60Result = history.lastOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer }
-        if (log60Result?.verdict == LabVerdict.OBSERVED) {
-            val longLog60 = log60Result.attempt.copy(longer = true, retryIndex = 0)
+        val log60AnyObserved = history.firstOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && it.verdict == LabVerdict.OBSERVED }
+        if (log60AnyObserved != null) {
+            val longLog60 = log60AnyObserved.attempt.copy(longer = true, retryIndex = 0)
             if (longLog60.key !in seen) {
-                return LabDecision(longLog60, log60Result.id, "Stage C (H-05): extend verified 4K60 OCLog2 to 10 s window.")
+                return LabDecision(longLog60, log60AnyObserved.id, "Stage C (H-05): extend verified 4K60 OCLog2 to 10 s window.")
             }
         }
         if (gpu30Ok || log30Ok || synth60AnyOk) {
             candidates.firstOrNull {
-                it.path == LabPath.GPU_HEVC_4K60 && !it.longer && !it.previewOnly && it.key !in seen
+                it.path == LabPath.GPU_HEVC_4K60 && !it.longer && !it.previewOnly && it.variant.isBlank() && it.key !in seen
             }?.let { gpu60 ->
                 return LabDecision(gpu60, log60Result?.id, "Stage C: test 4K60 GPU HEVC Main8 on regular session.")
             }
         }
+        if (log60AnyObserved != null || history.any { it.attempt.path == LabPath.GPU_HEVC_4K60 && it.verdict == LabVerdict.OBSERVED }) {
+            candidates.firstOrNull {
+                (it.path == LabPath.LOG_REGULAR_4K60 || it.path == LabPath.GPU_HEVC_4K60) &&
+                    !it.longer && !it.previewOnly && it.variant == "scopes_pbo" && it.key !in seen
+            }?.let { pboCase ->
+                return LabDecision(pboCase, log60Result?.id, "Stage C: verify async PBO scope readback at 4K60 without GPU stall.")
+            }
+        }
 
-        // Stage D: Sustained direct 4K60 HEVC + live SurfaceTexture preview.
+        // Stage D: Sustained direct 4K60 HEVC + live SurfaceTexture preview (720p & 360p fallback/comparison).
         val directStShort = candidates.firstOrNull {
             it.path == LabPath.DIRECT_HEVC_SURFACETEXTURE && !it.longer && !it.previewOnly
         }
@@ -87,6 +111,21 @@ internal class LabAutonomousPlanner(
                 it.path == LabPath.DIRECT_HEVC_SURFACETEXTURE && it.longer && it.key !in seen
             }?.let { sustained ->
                 return LabDecision(sustained, directStShortResult.id, "Stage D (H-06): escalate SurfaceTexture direct 4K60 to 30 s sustained.")
+            }
+        }
+        if (directStShortResult != null && directStShortResult.verdict != LabVerdict.OBSERVED) {
+            candidates.firstOrNull {
+                it.path == LabPath.DIRECT_HEVC_SURFACETEXTURE_360P && !it.longer && !it.previewOnly && it.key !in seen
+            }?.let { st360 ->
+                return LabDecision(st360, directStShortResult.id, "Stage D (H-06): drop SurfaceTexture preview to 640x360 to test 4K60 HAL drop relief.")
+            }
+        }
+        val st360Result = history.lastOrNull { it.attempt.path == LabPath.DIRECT_HEVC_SURFACETEXTURE_360P && !it.attempt.longer }
+        if (st360Result?.verdict == LabVerdict.OBSERVED) {
+            candidates.firstOrNull {
+                it.path == LabPath.DIRECT_HEVC_SURFACETEXTURE_360P && it.longer && it.key !in seen
+            }?.let { sustained360 ->
+                return LabDecision(sustained360, st360Result.id, "Stage D (H-06): escalate 360p SurfaceTexture direct 4K60 to 30 s sustained.")
             }
         }
         val directFallback = candidates.firstOrNull { it.path == LabPath.DIRECT_HEVC && it.longer && it.key !in seen }
@@ -117,6 +156,7 @@ internal class LabAutonomousPlanner(
             LabPath.GPU_HEVC_4K30,
             LabPath.GPU_HEVC_4K60,
             LabPath.DIRECT_HEVC_SURFACETEXTURE,
+            LabPath.DIRECT_HEVC_SURFACETEXTURE_360P,
         )
         val candidate = history.lastOrNull { res ->
             res.attempt.retryIndex == 0 &&
@@ -137,7 +177,7 @@ internal class LabAutonomousPlanner(
         LabPath.CODEC_SYNTHETIC_MATRIX -> "Stage A · Synthetic Encoder Matrix"
         LabPath.LOG_REGULAR_4K30, LabPath.GPU_HEVC_4K30 -> "Stage B · 4K30 LOG & GPU HEVC"
         LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K60 -> "Stage C · 4K60 LOG Escalation"
-        LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
+        LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE, LabPath.DIRECT_HEVC_SURFACETEXTURE_360P ->
             "Stage D · Direct 4K60 Sustained"
         LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.SOURCE_FORMAT_PROBE -> "Stage E · ISP & Source Probe"
         LabPath.CODEC_LEVEL_PAIR -> "Stage F · Codec Level Control"

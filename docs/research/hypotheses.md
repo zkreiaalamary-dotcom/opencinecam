@@ -6,7 +6,7 @@ This document audits the Research Lab's automated `H-01..H-10` verdicts (`knowle
 
 ## 1. Audited Verdict Table (`H-01` .. `H-10`)
 
-> **Important:** `LabKnowledgeBase.kt` contained four instrumentation/logic bugs (detailed in `deep-analysis.md` §6) that caused `H-01`, `H-02`, `H-04`, `H-05`, and `H-08` to display misleading statuses in the automated `report.md`. The table below shows **both** the automated lab output and the **verified engineering status**.
+> **Important (Updated 2026-11-26):** `LabKnowledgeBase.kt`, `LabSyntheticEncoderProbe.kt`, `LabRegularLogRunner.kt`, and `LabSourceProbe.kt` have now been patched on `research/autonomous-log-lab` to eliminate all four instrumentation bugs (`codec_arm_result`, `baseKey` `previewOnly`/`flatToneMap`/`variant`, 0-sample `H-02` `INCONCLUSIVE`, `60M->120M` double scaling, GLSL `.trimIndent()`, `PRESET_SRGB` quarantine, and empty-camera `SOURCE_FORMAT_PROBE` failure). Host tests & APK build passed; on-device verification awaits `LMR-LX9` connection.
 
 | ID | Hypothesis Statement | Automated Lab Status (R2 / R3) | Audited Epistemic Status | Evidence & Correction Explanation |
 |---|---|---|---|---|

@@ -50,4 +50,20 @@ class ResearchEncoderOverrideTest {
         assertTrue(researched.use8BitConfig)
         assertFalse(researched.useBt2020Linear)
     }
+
+    @Test
+    fun resolveBitratePlanPreservesProductionScalingAndSupportsExplicitUnscaledOverride() {
+        val prod60 = OpenCineLogGpuPipeline.resolveBitratePlan(40_000_000, 60, 100_000_000, null)
+        assertEquals(80_000_000, prod60.sentToCodecBps)
+        assertFalse(prod60.clampedByCodecMax)
+
+        val unscaled60 = OpenCineLogGpuPipeline.resolveBitratePlan(
+            60_000_000,
+            60,
+            100_000_000,
+            ResearchEncoderOverride(explicitTargetBitrateBps = 60_000_000),
+        )
+        assertEquals(60_000_000, unscaled60.sentToCodecBps)
+        assertFalse(unscaled60.clampedByCodecMax)
+    }
 }

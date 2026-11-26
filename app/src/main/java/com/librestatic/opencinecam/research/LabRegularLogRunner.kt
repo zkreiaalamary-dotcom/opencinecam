@@ -63,7 +63,15 @@ internal class LabRegularLogRunner(
         overrideRecipe: ResearchEncoderOverride? = null,
     ): Pair<LabVerdict, String?> {
         val passthroughSdr = case.path == LabPath.GPU_HEVC_4K30 || case.path == LabPath.GPU_HEVC_4K60
-        val effectiveOverride = overrideRecipe ?: defaultOverrideFor(case)
+        val requestedBitrate = if (case.fps >= 60) 60_000_000 else 40_000_000
+        val baseOverride = overrideRecipe ?: defaultOverrideFor(case)
+        val effectiveOverride = baseOverride.copy(
+            explicitTargetBitrateBps = requestedBitrate,
+            forceEgl8BitForMain10 = baseOverride.forceEgl8BitForMain10 || case.variant == "egl8",
+            disableVuiRewrite = baseOverride.disableVuiRewrite || case.variant == "novui",
+            useAsyncPboScopes = baseOverride.useAsyncPboScopes || case.variant == "scopes_pbo",
+            enableFrameDiagnostics = true,
+        )
         val provenance = if (passthroughSdr) "POST_ISP_SDR_GPU" else "POST_ISP_SDR_LOG"
 
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
@@ -88,6 +96,7 @@ internal class LabRegularLogRunner(
         val firstCameraResult = AtomicBoolean()
         val retiring = AtomicBoolean()
         val previewCount = AtomicInteger()
+        val scopeCallbacks = AtomicInteger()
         val failedCaptures = AtomicInteger()
         val fault = AtomicReference<String?>()
         val observedToneMap = AtomicReference<Int?>()
@@ -113,19 +122,25 @@ internal class LabRegularLogRunner(
             attempt.notice(json(
                 "event" to "regular_log_config",
                 "path" to case.path.name,
+                "variant" to case.variant,
                 "width" to case.width,
                 "height" to case.height,
                 "fps" to case.fps,
+                "requestedBitrateBps" to requestedBitrate,
                 "passthroughSdr" to passthroughSdr,
                 "flatToneMapRequested" to case.flatToneMap,
                 "explicitHevcLevel" to effectiveOverride.explicitHevcLevel,
                 "hevcLevelName" to HevcEncoderLevels.hevcLevelName(effectiveOverride.explicitHevcLevel),
                 "forceEgl8BitForMain10" to effectiveOverride.forceEgl8BitForMain10,
                 "omitEglBt2020ColorSpace" to effectiveOverride.omitEglBt2020ColorSpace,
+                "disableVuiRewrite" to effectiveOverride.disableVuiRewrite,
+                "useAsyncPboScopes" to effectiveOverride.useAsyncPboScopes,
+                "enableFrameDiagnostics" to effectiveOverride.enableFrameDiagnostics,
                 "allowAvcFallback" to effectiveOverride.allowAvcFallback,
                 "sourceProvenance" to provenance,
             ))
 
+            val enableScopes = case.variant == "scopes_pbo" || case.variant == "scopes_sync"
             val gpu = OpenCineLogGpuPipeline(
                 size = size,
                 sourcePath = OpenCineLogSourcePath.SDR_BT709_ISP,
@@ -137,10 +152,14 @@ internal class LabRegularLogRunner(
                 targetFps = case.fps,
                 passthroughSdr = passthroughSdr,
                 appContext = context.applicationContext,
+                onAnalysis = if (enableScopes) { _ -> scopeCallbacks.incrementAndGet() } else null,
                 researchEncoderOverride = effectiveOverride,
             ) { code, msg ->
                 fault.compareAndSet(null, "$code: $msg")
             }
+            if (enableScopes) gpu.setAnalysisBurst(true)
+            gpu.onFirstRecordedFrame = signals::onRecordingFirstFrame
+            gpu.onRecordedFrame = signals::onRecordingFrame
             gpu.attachResearchObserver(signals)
             pipeline = gpu
             val cameraSurface = gpu.cameraInputSurface
@@ -268,7 +287,7 @@ internal class LabRegularLogRunner(
                 lensFacing = descriptor.lensFacing,
                 mode = RecordingGeometryMode.NATIVE_RASTER,
             )
-            val bitrate = if (case.fps >= 60) 60_000_000 else 40_000_000
+            val bitrate = requestedBitrate
             val pfdMode = ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_READ_WRITE
             val stoppedFuture = CompletableFuture<Boolean>()
             val evidenceRef = AtomicReference<com.librestatic.opencinecam.camera.OpenCineLogRecordingEvidence?>()
@@ -329,6 +348,51 @@ internal class LabRegularLogRunner(
                     "sourceProvenance" to provenance,
                 ))
             }
+            val bitratePlan = gpu.lastBitrateResolutionSnapshot()
+            val frameDiagSummary = gpu.frameDiagnosticsSnapshot()
+            val pboStats = gpu.scopePboStatsSnapshot()
+            attempt.notice(json(
+                "event" to "regular_log_diag",
+                "variant" to case.variant,
+                "scopeCallbacks" to scopeCallbacks.get(),
+                "bitratePlan" to bitratePlan?.let {
+                    json(
+                        "requestedTargetBps" to it.requestedTargetBps,
+                        "computedScaledBps" to it.computedScaledBps,
+                        "sentToCodecBps" to it.sentToCodecBps,
+                        "codecMaxBps" to it.codecMaxBps,
+                        "clampedByCodecMax" to it.clampedByCodecMax,
+                    )
+                },
+                "frameDiagnostics" to frameDiagSummary?.let {
+                    json(
+                        "totalFrames" to it.totalFrames,
+                        "totalGaps" to it.totalGaps,
+                        "totalMissingFrames" to it.totalMissingFrames,
+                        "maxTotalUs" to it.maxTotalUs,
+                        "maxLatchUs" to it.maxLatchUs,
+                        "maxEncoderDrawUs" to it.maxEncoderDrawUs,
+                        "maxEncoderSwapUs" to it.maxEncoderSwapUs,
+                        "maxScopesUs" to it.maxScopesUs,
+                        "maxSubjectUs" to it.maxSubjectUs,
+                        "maxPreviewDrawUs" to it.maxPreviewDrawUs,
+                        "maxPreviewSwapUs" to it.maxPreviewSwapUs,
+                        "maxDrainWriteUs" to it.maxDrainWriteUs,
+                        "maxDrainDequeueGapUs" to it.maxDrainDequeueGapUs,
+                    )
+                },
+                "asyncPbo" to pboStats?.let {
+                    json(
+                        "enabled" to it.enabled,
+                        "framesQueued" to it.framesQueued,
+                        "asyncReadsCompleted" to it.asyncReadsCompleted,
+                        "syncFallbacks" to it.syncFallbacks,
+                        "avgMapUs" to it.avgMapUs,
+                        "maxMapUs" to it.maxMapUs,
+                        "lastFallbackReason" to it.lastFallbackReason,
+                    )
+                },
+            ))
         } finally {
             retiring.set(true)
             val cameraClosed = closed.thenApply { Unit }
@@ -356,20 +420,33 @@ internal class LabRegularLogRunner(
     }
 
     private fun defaultOverrideFor(case: LabCase): ResearchEncoderOverride {
-        val hevcCaps = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
+        val targetProfile = if (case.path == LabPath.GPU_HEVC_4K30 || case.path == LabPath.GPU_HEVC_4K60) {
+            MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
+        } else {
+            MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+        }
+        val hevcProfileLevels = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
             .filter { it.isEncoder && !it.isAlias && it.isHardwareAccelerated }
             .firstNotNullOfOrNull { info ->
                 val type = info.supportedTypes.firstOrNull { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, true) }
                     ?: return@firstNotNullOfOrNull null
                 val caps = runCatching { info.getCapabilitiesForType(type) }.getOrNull() ?: return@firstNotNullOfOrNull null
                 if (MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface !in caps.colorFormats) return@firstNotNullOfOrNull null
-                caps.profileLevels.map { it.level }
+                caps.profileLevels.map {
+                    com.librestatic.opencinecam.media.video.EncoderProfileLevel(it.profile, it.level)
+                }
             }.orEmpty()
-        val level = HevcEncoderLevels.selectHevcLevel(case.width, case.height, case.fps, hevcCaps)
-            ?: HevcEncoderLevels.minimumMainTierLevel(case.width, case.height, case.fps)
+        val level = HevcEncoderLevels.selectHevcLevelForProfile(
+            targetProfile, case.width, case.height, case.fps, hevcProfileLevels,
+        ) ?: if (targetProfile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10) {
+            MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel62
+        } else {
+            HevcEncoderLevels.minimumMainTierLevel(case.width, case.height, case.fps)
+        }
         return ResearchEncoderOverride(
             explicitHevcLevel = level,
             allowAvcFallback = false,
+            enableFrameDiagnostics = true,
         )
     }
 

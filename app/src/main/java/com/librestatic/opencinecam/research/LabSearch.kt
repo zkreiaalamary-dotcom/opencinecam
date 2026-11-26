@@ -14,6 +14,7 @@ internal enum class LabPath {
     DIRECT_HEVC,
     DIRECT_HEVC_PREVIEW,
     DIRECT_HEVC_SURFACETEXTURE,
+    DIRECT_HEVC_SURFACETEXTURE_360P,
     CODEC_LEVEL_PAIR,
     CODEC_SYNTHETIC_MATRIX,
     LOG_REGULAR_4K30,
@@ -39,14 +40,17 @@ internal data class LabCase(
     val previewOnly: Boolean = false,
     val flatToneMap: Boolean = false,
     val retryIndex: Int = 0,
+    val variant: String = "",
 ) {
     val key get() = "$camera/${path.name}/${width}x$height/$fps/$hfr/$longer/$previewOnly" +
         (if (flatToneMap) "/flat" else "") +
+        (if (variant.isNotBlank()) "/$variant" else "") +
         (if (retryIndex > 0) "/retry$retryIndex" else "")
     val label get() = "${path.name} · ${width}×$height · $fps fps" +
         (if (hfr) " · HFR" else "") +
         (if (previewOnly) " · preview only" else "") +
         (if (flatToneMap) " · FLAT" else "") +
+        (if (variant.isNotBlank()) " · $variant" else "") +
         (if (longer) " · sustained" else "") +
         (if (retryIndex > 0) " · retry #$retryIndex" else "")
 }

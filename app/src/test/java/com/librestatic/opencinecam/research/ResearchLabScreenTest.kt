@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import com.librestatic.opencinecam.ui.theme.AppTheme
 import com.librestatic.opencinecam.ui.theme.OpenCineCamTheme
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -75,5 +76,45 @@ class ResearchLabScreenTest {
         composeRule.onNodeWithTag("lab-hypothesis").assertIsDisplayed()
         composeRule.onNodeWithTag("lab-telemetry").assertIsDisplayed()
         composeRule.onNodeWithTag("lab-stop").assertIsDisplayed()
+    }
+
+    @Test
+    fun storageCardSupportsLimitSelectionAndManualVerifiedPruneConfirmation() {
+        var selectedLimit = 0L
+        var pruned = false
+        composeRule.setContent {
+            OpenCineCamTheme(AppTheme.CINE) {
+                ResearchLabContent(
+                    status = "Ready",
+                    running = false,
+                    exporting = false,
+                    storage = LabStorageUiState(
+                        usedBytes = 2_400_000_000L,
+                        mediaBytes = 2_390_000_000L,
+                        metadataBytes = 10_000_000L,
+                        limitBytes = 20_000_000_000L,
+                        freeBytes = 32_000_000_000L,
+                        reserveBytes = 5_368_709_120L,
+                        verifiedPrunableBytes = 2_390_000_000L,
+                        verifiedPrunableFiles = 4,
+                        hasVerifiedExport = true,
+                    ),
+                    onBack = {},
+                    onStart = {},
+                    onNew = {},
+                    onStop = {},
+                    onExport = {},
+                    onSelectLimitBytes = { selectedLimit = it },
+                    onPruneVerified = { pruned = true },
+                )
+            }
+        }
+        composeRule.onNodeWithTag("lab-storage").assertIsDisplayed()
+        composeRule.onNodeWithTag("lab-limit-50").performClick()
+        assertEquals(50_000_000_000L, selectedLimit)
+
+        composeRule.onNodeWithTag("lab-prune-verified").performClick()
+        composeRule.onNodeWithTag("lab-prune-confirm").performClick()
+        assertTrue(pruned)
     }
 }

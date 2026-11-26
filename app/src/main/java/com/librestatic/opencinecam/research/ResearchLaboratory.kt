@@ -32,7 +32,8 @@ internal class ResearchLaboratory(
     private val cancelled = AtomicBoolean()
     private val root = evidenceRoot(context)
     private val started = SystemClock.elapsedRealtime()
-    private val thermalPolicy = LabThermalPolicy()
+    private val evidenceLimitBytes = LabStorageManager.loadEvidenceLimitBytes(context)
+    private val thermalPolicy = LabThermalPolicy(evidenceLimitBytes = evidenceLimitBytes)
     private var activeJournal: LabJournal? = null
     private var nextEnvironmentalCheck = 0L
     private var lastThermalStatus: Int? = null
@@ -156,6 +157,19 @@ internal class ResearchLaboratory(
                 runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
                 return "Research complete. Evidence is ready to export."
             }
+            val estimateBytes = LabStorageManager.estimateAttemptBytes(next.attempt)
+            val spaceDecision = LabStorageManager.checkSpace(
+                root = root,
+                limitBytes = evidenceLimitBytes,
+                upcomingEstimateBytes = estimateBytes,
+            )
+            if (!spaceDecision.allowed) {
+                val reason = spaceDecision.reason ?: "Insufficient storage budget for upcoming experiment."
+                val currentSample = sampleThermal(context, root, evidenceLimitBytes).also { lastSample = it }
+                journal.recordStop(reason, currentSample.toJson())
+                runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
+                return reason
+            }
             val stageTitle = planner.stageLabel(next.attempt)
             status("$stageTitle · ${next.attempt.label}")
             val sample = lastSample ?: sampleThermal(context, root).also { lastSample = it }
@@ -202,7 +216,7 @@ internal class ResearchLaboratory(
     ): String? = executeIsolatedAttempt(attempt, case, knowledge) {
         when (case.path) {
             LabPath.RAW_CAMERA, LabPath.RAW_NATIVE -> runRaw(case, attempt)
-            LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE ->
+            LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE, LabPath.DIRECT_HEVC_SURFACETEXTURE_360P ->
                 LabDirectRecorder(context, ::checkBudget).run(case, attempt)
             LabPath.CODEC_LEVEL_PAIR -> runCodecLevelPair(case, attempt, ::checkBudget)
             LabPath.CODEC_SYNTHETIC_MATRIX -> LabSyntheticEncoderProbe.run(attempt, ::checkBudget)
@@ -270,7 +284,7 @@ internal class ResearchLaboratory(
     private fun awaitThermalClearance(journal: LabJournal, knowledge: LabKnowledgeBase) {
         while (true) {
             checkTimeAndCancel()
-            val sample = sampleThermal(context, root)
+            val sample = sampleThermal(context, root, evidenceLimitBytes)
             lastSample = sample
             val statusChanged = lastThermalStatus != null && lastThermalStatus != sample.thermalStatus
             lastThermalStatus = sample.thermalStatus
@@ -312,7 +326,7 @@ internal class ResearchLaboratory(
         val now = SystemClock.elapsedRealtime()
         if (!forceSample && now < nextEnvironmentalCheck) return
         nextEnvironmentalCheck = now + TELEMETRY_INTERVAL_MS
-        val sample = sampleThermal(context, root)
+        val sample = sampleThermal(context, root, evidenceLimitBytes)
         lastSample = sample
         val statusChanged = lastThermalStatus != null && lastThermalStatus != sample.thermalStatus
         lastThermalStatus = sample.thermalStatus
@@ -322,9 +336,8 @@ internal class ResearchLaboratory(
         when (val decision = thermalPolicy.evaluate(sample, betweenAttempts = false)) {
             is ThermalDecision.Continue -> Unit
             is ThermalDecision.CooldownWait -> {
-                val reason = "Research paused due to thermal load (status=MODERATE, ${sample.batteryTempTenthsC / 10.0} °C)."
-                activeJournal?.recordStop(reason, sample.toJson())
-                throw LabStop(reason)
+                activeJournal?.recordStop(decision.reason, sample.toJson())
+                throw LabStop(decision.reason)
             }
             is ThermalDecision.HardStop -> {
                 activeJournal?.recordStop(decision.reason, sample.toJson())
