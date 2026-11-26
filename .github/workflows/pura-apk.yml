@@ -3,7 +3,7 @@ name: Pura test APK
 on:
   workflow_dispatch:
   push:
-    branches: [pura-apk-build, research/self-exploring-lab, research/pura80-capture-probes]
+    branches: [pura-apk-build, research/self-exploring-lab, research/pura80-capture-probes, research/autonomous-log-lab]
 
 permissions:
   contents: read

@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.AtomicFile
 import java.io.File
+import java.io.FileOutputStream
 import java.io.OutputStream
 import java.util.UUID
 import java.util.zip.ZipEntry
@@ -17,6 +18,9 @@ import org.json.JSONObject
 internal class LabJournal private constructor(private val directory: File, revision: String? = null) {
     private val header = File(directory, "run.json")
     private val complete = File(directory, "summary.json")
+    private val telemetryFile = File(directory, "telemetry.jsonl")
+    private val pauseFile = File(directory, "pause.json")
+    private val telemetryLock = Any()
     val finished: Boolean get() = complete.isFile
     fun compatibleWith(revision: String): Boolean = readJson(header)?.let {
             it.optInt("schemaVersion") == VERSION && it.optString("apkSourceRevision") == revision &&
@@ -66,6 +70,27 @@ internal class LabJournal private constructor(private val directory: File, revis
                 "case" to decision.attempt.toJson(), "parent" to decision.parent, "hypothesis" to decision.hypothesis,
             ))
         }
+    }
+
+    fun appendTelemetry(sample: JSONObject) {
+        synchronized(telemetryLock) {
+            FileOutputStream(telemetryFile, true).use { stream ->
+                stream.write((sample.toString() + "\n").toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
+            }
+        }
+    }
+
+    fun recordStop(reason: String, snapshot: JSONObject?) {
+        val stopRecord = json(
+            "event" to "run_paused",
+            "reason" to reason,
+            "epochMs" to System.currentTimeMillis(),
+            "elapsedMs" to SystemClock.elapsedRealtime(),
+            "snapshot" to snapshot,
+        )
+        writeJson(pauseFile, stopRecord)
+        appendTelemetry(stopRecord)
     }
 
     fun finish(reason: String) {

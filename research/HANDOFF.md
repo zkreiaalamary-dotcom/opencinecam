@@ -1,29 +1,22 @@
-# Handoff · Huawei Pura 80 Pro global
+# Handoff · Huawei Pura 80 Pro (`research/autonomous-log-lab`)
 
-**First action on the capture-probes branch.** Install the research APK and start a fresh run on logical back camera 0. Use [the field protocol](CAPTURE-PROBES.md) to interpret the direct UHD60 pair, HEVC level experiment, GPU preparation receipts and decoded geometry screen. The original observations below remain the baseline.
+**Current branch:** `research/autonomous-log-lab` (branched from `research/pura80-capture-probes` @ `85574fa3ddfe80b768634ca48ac4c19bb3bb9f70`).
+**Target device:** Huawei Pura 80 Pro — LMR-LX9 — Kirin 9020 — EMUI 15 — Android API 31.
 
-**Verified lab APK.** Source `d0ffb123551cabc2968bd753941c87a77950e7c8`, version `2.0.1-research` (112). The [CI run](https://github.com/zkreiaalamary-dotcom/opencinecam/actions/runs/45696398083) built and signature-verified the research package and passed the four Gradle host test tasks. The [APK archive](https://github.com/zkreiaalamary-dotcom/opencinecam/actions/runs/45696398083/artifacts/15062001139) contains SHA256SUMS. Match the installed run's `apkSourceRevision` to this commit. The APK SHA-256 is `bbbb2734d81a20b0bc7af17f08a2b546432e1c9e8860e3b48e03ec7d839ac20f`. Evidence keys are `E-CI-CAPTURE-01` and `E-HOST-GEOM-01`.
+## Verified baseline (including `OpenCineCam-research (1).zip`)
 
-| Question | What you can rely on | Evidence |
+| Area | Verified fact | Evidence |
 |---|---|---|
-| Does the OpenCineCam run prove UHD60 recording? | Its 4K60 profile was dropped before encode. A 1080p source was handed a UHD recording geometry. Separately, Pura Cinema measured 59.920 fps through one camera output for a short HEVC Main take, with no logged long intervals. | `E-OCC-007/008`, `E-PURA-5792636/5799500` |
-| Why did HEVC fail here? | HiSilicon refused the exact UHD30 HEVC Main configure request. The file is disclosed AVC fallback. Pura's MediaRecorder path reaches HEVC Main UHD30. A missing explicit HEVC level is the highest-value format delta to test. | `E-OCC-012`, `E-PURA-5759920`, `X-02` |
-| Can Main10 produce a file? | Yes on a prior Pura route, with 10-bit SPS and independent decode on archived originals. Three originals across two paths exhibit near-duplicated encoded-image halves. This blocks any usable Main10 or Log qualification. | `E-PURA-5698009/5710757`, `E-PURA-GEOM`, `X-03` |
-| Is the 1080p60 mismatch real? | One 30.247 ms interval appears first in consecutive sensor timestamps and then in GPU and file. No duplicate PTS or observed frame-number drop. | `E-OCC-002/003`, `X-04` |
-| Does this device have verified OCLog2? | Regular HLG-derived OCLog2 is gated on API 31; the separate SDR-ISP HFR branch stopped during preparation. Source precision and any global stock Log are open. | `E-OCC-011/CAPS`, `E-PURA-PRECISION/STOCK`, `X-07/08` |
+| Direct 4K60 HEVC | `DIRECT_HEVC` (`59.893 fps`, `43.30 Mbps`) and `DIRECT_HEVC_PREVIEW` (`59.920 fps`, `214` drained 720p `PRIVATE` frames, `31.54 Mbps`) both passed 4 s file/geometry/content-diff checks on `d0ffb123`. Run 1 reached `59.291 fps` (`MISMATCH`). | `E-OCC2-R1-001`, `E-OCC2-R2-001`, `E-OCC2-R2-002`, `E-HOST-GEOM-02` |
+| HEVC `KEY_LEVEL` | `OMX.hisi.video.encoder.hevc` Main 4K30 rejected `configure` (`0x80001001`) with `level=null` and started cleanly with `HEVCMainTierLevel51` (`65536`, `framesSubmitted=0`). | `E-OCC2-R2-003` |
+| GPU HEVC & 4K60 | Production GPU HEVC omitted `KEY_LEVEL` and fell back to AVC (`4K30`, `1080p30`). Unlisted GPU `4K60` fell back to `1920x1080@60`. | `E-OCC2-R2-004`, `008`, `009`, `012` |
+| HFR 1080p120 LOG | Reached `codec_create(OMX.hisi.video.encoder.hevc)` and failed `configure` (`0x80001001`, `profile=2`, no `KEY_LEVEL`, `80 Mbps`). | `E-OCC2-R2-005` |
+| Thermal pause gap | Run 1 ended after 1 attempt without `summary.json`; only `001-requested.json` had `thermalStatus=1`, `34.0 °C`. Phase 1 adds `telemetry.jsonl`, `pause.json`, and 45 s cooldown hysteresis. | `E-OCC2-R1-001`, `LabTelemetry.kt` |
+| Main10 & source precision | Main10 geometry, 10-bit ramp precision, regular 4K30/4K60 OCLog2, ISP ToneMap curve control, and `RAW_SENSOR`/physical cameras remain unverified on device. | `E-PURA-GEOM`, `E-OCC-CAPS` |
 
-## Read in this order
+## Active build order
 
-1. [STATE.md](STATE.md) for branch context and current policy.
-2. [ANALYSIS.md](ANALYSIS.md) for causal chains, competing hypotheses and the pinned source links. Start within `P-UHD60-GRAPH`, `P-HEVC-MAIN` and `P-MAIN10-GEOMETRY`.
-3. [EVIDENCE.jsonl](EVIDENCE.jsonl) for exact attempt folders, clip and source hashes, and directly comparable measurements. Retrieve the raw attachment or authorized Pura evidence only by the targeted file/experiment IDs. Entries labelled prior are reports and audited metrics preserved from the earlier project.
-4. [ROADMAP.md](ROADMAP.md) for small differential tests and their promotion conditions. Use the existing [lab design](../docs/research/self-exploring-lab.md) and [OCLog2 editor protocol](../docs/color/oclog2-resolve-protocol.md) for surrounding contracts.
-
-## Delegate these unresolved questions to the next engineer
-
-- **UHD60** · Which exact descriptor filter rejects the tuple, and how much of the repeatable direct path benefit is due to output count, consumer usage or ISP mode? Get the per-consumer duration and actual buffer receipt before changing product gating.
-- **Codec and geometry** · Does a minimal explicit HEVC level fix configure for Main8 and Main10 independently? Does an asymmetric synthetic RGB10 input reproduce the repeat-half artifact? A clean bitstream and clean geometry must both pass.
-- **Source fidelity** · Can a verified 10-bit source reach the app on this build? The prior P010 rejection and RAW_SENSOR/YUV observations already constrain the next experiment. Test packing and black/white response before a RAW throughput or OCLog2 claim.
-- **Product strategy** · Qualify reliable UHD24/25/30 capture and stock-quality SDR grading first. Advance direct UHD60 and 1080p120 as independent modes. Treat Main10, regular OCLog2 and the regional stock path as separate gates.
-
-The camera experiments in the supplied archive predate this build. The next hardware evidence should cover the short direct pair, actual file/sensor timing and the HEVC preparation receipts before changing product defaults.
+1. **Phase 1 (Complete):** Branch `research/autonomous-log-lab`, CI workflow update, `OpenCineCam-research (1).zip` evidence integration, `LabTelemetry.kt` + `telemetry.jsonl`/`pause.json` + cooldown hysteresis, enriched `LabProfiles.inventory()`.
+2. **Phase 2 (Next):** `HevcEncoderLevels`, `HevcSpsInspector`, coded-orientation content-uniqueness & ramp-precision analyzer, synthetic EGL Main8/Main10 matrix (`X-02`/`X-03`).
+3. **Phase 3:** Live 4K30/4K60 regular-session `OCLog2` & GPU HEVC research path, ISP `TONEMAP_MODE_CONTRAST_CURVE` A/B + `RAW_SENSOR`/`P010` source probe, sustained 30 s direct 4K60 + live `SurfaceTexture` preview.
+4. **Phase 4:** Autonomous planner, cumulative `knowledge.json`, inconclusive retry & contradiction tracking, `report.md`/`report.json` generator, UI readout, full test pass & Research Lab APK build.

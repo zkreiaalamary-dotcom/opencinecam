@@ -4,13 +4,8 @@
 package com.librestatic.opencinecam.research
 
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.os.BatteryManager
-import android.os.PowerManager
-import android.os.StatFs
 import android.os.SystemClock
 import com.librestatic.opencinecam.camera.Camera2PreviewEngine
 import com.librestatic.opencinecam.camera.CaptureOwnerAdmission
@@ -35,21 +30,26 @@ internal class ResearchLaboratory(
     private val cancelled = AtomicBoolean()
     private val root = evidenceRoot(context)
     private val started = SystemClock.elapsedRealtime()
+    private val thermalPolicy = LabThermalPolicy()
+    private var activeJournal: LabJournal? = null
     private var nextEnvironmentalCheck = 0L
+    private var lastThermalStatus: Int? = null
+    private var lastSample: ThermalSample? = null
 
     fun cancel() { cancelled.set(true) }
 
     fun run(resume: Boolean): String {
         check(exclusive.compareAndSet(false, true)) { "A research run is already closing." }
         try {
-            checkBudget()
             val latest = LabJournal.latest(root)
             val revision = context.getString(com.librestatic.opencinecam.R.string.research_lab_revision)
             val build = if (revision == "local-unknown") {
                 "local-" + context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
             } else revision
             val journal = latest?.takeIf { resume && !it.finished && it.compatibleWith(build) } ?: LabJournal.create(root, build)
+            activeJournal = journal
             journal.recoverInterrupted()
+            checkBudget(forceSample = true)
             val manager = context.getSystemService(CameraManager::class.java)
             val scanner = Camera2PreviewEngine(context, deviceQuirks = DeviceQuirksProvider.lazy(context))
             val descriptors = try { scanner.descriptors(1920, 1080) } finally {
@@ -72,13 +72,14 @@ internal class ResearchLaboratory(
         } catch (stop: LabStop) {
             return stop.message.orEmpty()
         } finally {
+            activeJournal = null
             exclusive.set(false)
         }
     }
 
     private fun explore(journal: LabJournal, search: LabSearch, video: LabVideo): String {
         repeat(MAX_ATTEMPTS_PER_RUN) {
-            checkBudget()
+            awaitThermalClearance(journal)
             val history = journal.history()
             if (history.count { it.verdict != LabVerdict.STOPPED } >= MAX_ATTEMPTS_PER_RUN) {
                 journal.finish("Experiment budget reached")
@@ -91,7 +92,8 @@ internal class ResearchLaboratory(
             }
             status(next.attempt.label)
             val attempt = journal.begin(next)
-            attempt.notice(environment())
+            val sample = lastSample ?: sampleThermal(context, root).also { lastSample = it }
+            attempt.notice(sample.toJson())
             val stopReason = execute(next.attempt, attempt, video)
             if (stopReason != null) return stopReason
             val until = SystemClock.elapsedRealtime() + 1_000
@@ -178,44 +180,77 @@ internal class ResearchLaboratory(
         return if (measured) LabVerdict.OBSERVED to null else LabVerdict.FAILED to result.reasonCode
     }
 
-    private fun checkBudget() {
-        if (cancelled.get()) throw LabStop("Research paused. The saved run can be resumed.")
-        if (SystemClock.elapsedRealtime() - started >= 180_000L) throw LabStop("Time limit reached. The saved run can be resumed.")
-        val now = SystemClock.elapsedRealtime()
-        if (now < nextEnvironmentalCheck) return
-        nextEnvironmentalCheck = now + 1_000
-        val snapshot = environment()
-        val thermal = snapshot.getInt("thermalStatus")
-        if (thermal >= PowerManager.THERMAL_STATUS_MODERATE) throw LabStop("Research paused due to thermal load.")
-        val percent = snapshot.getInt("batteryPercent")
-        val temperature = snapshot.getInt("batteryTemperatureTenthsC")
-        if (percent < 25 || temperature >= 420) {
-            throw LabStop("Research paused at the battery limit (25% charge or 42 °C).")
-        }
-        if (snapshot.getLong("freeBytes") < 1_500_000_000L) {
-            throw LabStop("Research needs at least 1.5 GB of free storage.")
-        }
-        if (snapshot.getLong("evidenceBytes") >= 950_000_000L) {
-            throw LabStop("Research evidence is close to the 1 GB local limit.")
+    private fun awaitThermalClearance(journal: LabJournal) {
+        while (true) {
+            checkTimeAndCancel()
+            val sample = sampleThermal(context, root)
+            lastSample = sample
+            val statusChanged = lastThermalStatus != null && lastThermalStatus != sample.thermalStatus
+            lastThermalStatus = sample.thermalStatus
+            journal.appendTelemetry(sample.toJson())
+            nextEnvironmentalCheck = SystemClock.elapsedRealtime() + TELEMETRY_INTERVAL_MS
+            when (val decision = thermalPolicy.evaluate(sample, betweenAttempts = true)) {
+                is ThermalDecision.Continue -> return
+                is ThermalDecision.CooldownWait -> {
+                    status(decision.reason)
+                    if (statusChanged) {
+                        journal.appendTelemetry(sample.toJson().put("event", "thermal_cooldown_wait"))
+                    }
+                    Thread.sleep(COOLDOWN_POLL_MS)
+                }
+                is ThermalDecision.HardStop -> {
+                    journal.recordStop(decision.reason, sample.toJson())
+                    throw LabStop(decision.reason)
+                }
+            }
         }
     }
 
-    private fun environment(): JSONObject {
-        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val percent = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        return json(
-            "event" to "environment",
-            "batteryPercent" to if (scale > 0 && percent >= 0) 100 * percent / scale else -1,
-            "batteryTemperatureTenthsC" to (battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1),
-            "thermalStatus" to context.getSystemService(PowerManager::class.java).currentThermalStatus,
-            "freeBytes" to StatFs(context.filesDir.absolutePath).availableBytes,
-            "evidenceBytes" to root.walkTopDown().filter(File::isFile).sumOf(File::length),
+    private fun checkBudget() = checkBudget(forceSample = false)
+
+    private fun checkBudget(forceSample: Boolean) {
+        checkTimeAndCancel()
+        val now = SystemClock.elapsedRealtime()
+        if (!forceSample && now < nextEnvironmentalCheck) return
+        nextEnvironmentalCheck = now + TELEMETRY_INTERVAL_MS
+        val sample = sampleThermal(context, root)
+        lastSample = sample
+        val statusChanged = lastThermalStatus != null && lastThermalStatus != sample.thermalStatus
+        lastThermalStatus = sample.thermalStatus
+        activeJournal?.appendTelemetry(
+            sample.toJson().apply { if (statusChanged) put("statusTransition", true) },
         )
+        when (val decision = thermalPolicy.evaluate(sample, betweenAttempts = false)) {
+            is ThermalDecision.Continue -> Unit
+            is ThermalDecision.CooldownWait -> {
+                val reason = "Research paused due to thermal load (status=MODERATE, ${sample.batteryTempTenthsC / 10.0} °C)."
+                activeJournal?.recordStop(reason, sample.toJson())
+                throw LabStop(reason)
+            }
+            is ThermalDecision.HardStop -> {
+                activeJournal?.recordStop(decision.reason, sample.toJson())
+                throw LabStop(decision.reason)
+            }
+        }
+    }
+
+    private fun checkTimeAndCancel() {
+        if (cancelled.get()) {
+            val reason = "Research paused. The saved run can be resumed."
+            activeJournal?.recordStop(reason, lastSample?.toJson())
+            throw LabStop(reason)
+        }
+        if (SystemClock.elapsedRealtime() - started >= 180_000L) {
+            val reason = "Time limit reached. The saved run can be resumed."
+            activeJournal?.recordStop(reason, lastSample?.toJson())
+            throw LabStop(reason)
+        }
     }
 
     companion object {
         private const val MAX_ATTEMPTS_PER_RUN = 12
+        private const val TELEMETRY_INTERVAL_MS = 2_000L
+        private const val COOLDOWN_POLL_MS = 2_000L
         private val exclusive = AtomicBoolean()
 
         fun evidenceRoot(context: Context) = File(context.filesDir, "research-lab")

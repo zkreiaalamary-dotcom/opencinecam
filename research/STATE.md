@@ -1,18 +1,22 @@
 # OpenCineCam research state
 
-2026-11-25 · Huawei Pura 80 Pro global LMR-LX9 · EMUI 15 · Android API 31.
+2026-11-26 · Huawei Pura 80 Pro global LMR-LX9 · EMUI 15 · Android API 31.
 
 [Handoff](HANDOFF.md) · [Analysis](ANALYSIS.md) · [Roadmap](ROADMAP.md) · [Evidence index](EVIDENCE.jsonl)
 
-- Historical audit base `adc19ce1a8bc141885160b00c8bea83cca948787` from `research/self-exploring-lab`. The [existing handoff](../docs/research/agent-handoff.md) identifies `f02a4813d7157fb550437243c64c1818dbf0efb4` as its then-current built code. The archive supplies model/SDK/fingerprint and run metadata. The original archive omits its APK build identity.
-- Current evidence is complete for the supplied run: 12 attempts, eight valid MP4s (all AVC High 8-bit), two zero-byte placeholders, two preview-only attempts. Eight clip hashes and sample timing match Android extraction. A separate software decode sampled 55 frames. Lab summary closed on the attempt budget.
-- UHD60 `007/008`: the descriptor discarded the unlisted UHD60 tuple, then built a 1080p source. The recorder correctly rejected 4K geometry. Prior Pura recorder-only HEVC Main reached 59.920 fps in a short UHD file. Sustained operation in OpenCineCam is pending.
-- HEVC `012`: HiSilicon refused one exact configure request. Prior Pura HEVC Main files narrow recovery to the route and codec contract. Main10 was previously coded successfully, with near-repeat-half geometry in three independently audited originals.
-- 1080p60 `002`: one 30.247 ms sensor-origin interval, no duplicate PTS. HFR OCLog2 `011`: generic codec prep failure after camera results. Regular HLG-derived OCLog2 is gated by this API level and app policy.
-- Current positive OpenCineCam control is short UHD AVC at 24/25/30. The longest take is 10.036 s at UHD24. No new physical handset runs were made in this audit.
+- Active development branch: `research/autonomous-log-lab` (branched from `research/pura80-capture-probes` @ `85574fa3ddfe80b768634ca48ac4c19bb3bb9f70`).
+- **New field evidence integrated (`OpenCineCam-research (1).zip`, `E-OCC2-*`, revision `d0ffb123`, 2 runs, 13 attempts, 9 valid MP4s + 1 empty clip, all verified by `ffprobe`/`ffmpeg`):**
+  - **Direct 4K60 HEVC Main L5.1 confirmed (`E-OCC2-R2-001` / `002`)**: `59.893 fps` single-target (`43.30 Mbps`) and `59.920 fps` with a second `1280x720 PRIVATE ImageReader` (`214` preview frames drained, `31.54 Mbps`, `maxGapMs=16.689`), zero repeated PTS, clean geometry (`NO_REPEAT_FLAG`), distinct consecutive frames. Run 1 (`E-OCC2-R1-001`) reached `59.291 fps` (`MISMATCH` on the `0.5%` gate) and stopped without `summary.json`.
+  - **HEVC explicit level confirmed (`E-OCC2-R2-003`)**: `OMX.hisi.video.encoder.hevc` Main 4K30 failed at `configure` (`0x80001001`) when `KEY_LEVEL` was omitted, and started cleanly (`admitted=true`) with `HEVCMainTierLevel51` (`65536`), `framesSubmitted=0`.
+  - **GPU HEVC fallback confirmed (`E-OCC2-R2-004`, `012`)**: production GPU HEVC 4K30 and 1080p30 omit `KEY_LEVEL`, fail `configure` with `0x80001001`, and fall back to `OMX.hisi.video.encoder.avc`.
+  - **GPU 4K60 substitution confirmed (`E-OCC2-R2-008`, `009`)**: unlisted 4K60 GPU requests resolve `activeVideoProfile` to `null` and configure `1920x1080@60` (`configured_gpu_source`).
+  - **OCLog2 HFR 1080p120 failure localized (`E-OCC2-R2-005`)**: reached `codec_create OMX.hisi.video.encoder.hevc` and failed at `configure` (`0x80001001`, `profile=2` Main10, no `KEY_LEVEL`, `80 Mbps`, `color-standard=6`, `color-range=1`).
+  - **1080p60 control clean (`E-OCC2-R2-007`)**: `247` frames, `59.920 fps`, `maxGap=16.689 ms`, `0` outliers.
+  - **Thermal blind spot identified**: Run 1 stopped unexpectedly while `environment` showed `thermalStatus=1`, `34.0 °C`, `36%`; `checkBudget()` previously aborted on a single `MODERATE` read without persisting `telemetry.jsonl` or `pause.json`.
+- **Strategic priority shift**: highest priority is cinematic **4K30 and 4K60 LOG** (using `OpenCineLogGpuPipeline` + Main10 contract isolation + source precision / ISP tone-map verification) and **sustained direct 4K60 with live preview**, above 1080p120 HFR.
 
-## Implementation and next decision
+## Phase 1 implemented (`research/autonomous-log-lab`)
 
-The branch `research/pura80-capture-probes` implements the short `X-01` direct HEVC pair, `X-00` source/encoder receipts, the UHD30 Main explicit-level arm of `X-02`, and an RGB8 repeated-half screen for `X-03`. Host tests exercise scheduling, cadence, format parity and the geometry screen. Hardware results for these changes are pending. Start one session on the global handset and follow [CAPTURE-PROBES.md](CAPTURE-PROBES.md). Reserve sustained recording, synthetic Main10 rendering, source precision and Log qualification for the subsequent evidence gates.
-
-The installable revision is `d0ffb123551cabc2968bd753941c87a77950e7c8`. APK signature, package identity, archive digest and four successful Gradle host-test tasks are recorded in `E-CI-CAPTURE-01`. Python tooling discovery ran 156 tests with 4 skips. See [the verified build](https://github.com/zkreiaalamary-dotcom/opencinecam/actions/runs/45696398083) and [field handoff](HANDOFF.md). No handset capture is attributed to this verification.
+- Continuous thermal/resource telemetry (`LabTelemetry.kt`, `telemetry.jsonl`, `pause.json`) with `LabThermalPolicy` hysteresis (1 transient `MODERATE` tolerance during active work, 45 s bounded cooldown wait between attempts, immediate hard stop on `SEVERE` / `>= 42 °C` / `< 25%` battery / low storage).
+- Expanded `LabProfiles.inventory()` with per-size `StreamConfigurationMap` min/stall durations, full `MediaCodecList` encoder capability matrix, physical camera inventories, vendor keys, tone-map modes, and read-only Huawei CameraKit presence check.
+- Next phase (Phase 2): HEVC level helper, independent `HevcSpsInspector`, coded-orientation content-uniqueness & 10-bit ramp precision analyzer, and deterministic synthetic EGL Main8/Main10 encoder isolation matrix (`X-02` + `X-03`).

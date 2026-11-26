@@ -8,6 +8,8 @@ import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.params.DynamicRangeProfiles
+import android.media.MediaCodecList
+import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.os.Build
 import android.util.Size
@@ -16,8 +18,9 @@ import com.librestatic.opencinecam.camera.Camera2LogProfile
 import com.librestatic.opencinecam.camera.Camera2VideoProfile
 import com.librestatic.opencinecam.camera.OpenCineLogSourcePath
 import org.json.JSONArray
+import org.json.JSONObject
 
-internal class LabProfiles(manager: CameraManager, val descriptor: Camera2CameraDescriptor) {
+internal class LabProfiles(private val manager: CameraManager, val descriptor: Camera2CameraDescriptor) {
     private val id = descriptor.cameraId
     private val caps = manager.getCameraCharacteristics(id)
     private val map = requireNotNull(caps.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP))
@@ -113,5 +116,99 @@ internal class LabProfiles(manager: CameraManager, val descriptor: Camera2Camera
             )
         }),
         "profileGate" to if (!hlgAdvertised) "Public Camera2 HLG10 profile unavailable on this ID/API." else null,
+        "descriptorRejectionDiagnostics" to descriptorRejectionDiagnostics(),
+        "videoEncoders" to videoEncoderInventory(),
+        "physicalCameras" to physicalCameraInventory(),
+        "vendorKeys" to vendorKeyInventory(caps),
+        "toneMapModes" to JSONArray(caps.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toList().orEmpty()),
+        "maxToneMapCurvePoints" to caps.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS),
+        "colorCorrectionModes" to JSONArray(caps.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_MODES)?.toList().orEmpty()),
+        "huaweiCameraKitClassPresent" to runCatching { Class.forName("com.huawei.camera.camerakit.CameraKit") }.isSuccess,
     )
+
+    private fun descriptorRejectionDiagnostics(): JSONArray {
+        val probeSizes = listOf(Size(1280, 720), Size(1920, 1080), Size(3840, 2160), Size(4096, 2304))
+        return JSONArray(probeSizes.map { size ->
+            fun classDuration(klass: Class<*>) = json(
+                "listed" to (size in map.getOutputSizes(klass).orEmpty()),
+                "minFrameDurationNs" to runCatching { map.getOutputMinFrameDuration(klass, size) }.getOrNull(),
+                "stallDurationNs" to runCatching { map.getOutputStallDuration(klass, size) }.getOrNull(),
+            )
+            fun formatDuration(format: Int) = json(
+                "listed" to (size in runCatching { map.getOutputSizes(format).orEmpty() }.getOrDefault(emptyArray())),
+                "minFrameDurationNs" to runCatching { map.getOutputMinFrameDuration(format, size) }.getOrNull(),
+                "stallDurationNs" to runCatching { map.getOutputStallDuration(format, size) }.getOrNull(),
+            )
+            json(
+                "size" to "${size.width}x${size.height}",
+                "surfaceTexture" to classDuration(SurfaceTexture::class.java),
+                "mediaRecorder" to classDuration(MediaRecorder::class.java),
+                "private" to formatDuration(ImageFormat.PRIVATE),
+                "yuv420" to formatDuration(ImageFormat.YUV_420_888),
+                "rawSensor" to formatDuration(ImageFormat.RAW_SENSOR),
+                "raw10" to formatDuration(ImageFormat.RAW10),
+            )
+        })
+    }
+
+    private fun videoEncoderInventory(): JSONArray {
+        val codecs = MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos
+        val probePoints = listOf(
+            Triple(1920, 1080, 30),
+            Triple(1920, 1080, 60),
+            Triple(1920, 1080, 120),
+            Triple(3840, 2160, 30),
+            Triple(3840, 2160, 60),
+        )
+        return JSONArray(codecs.filter { it.isEncoder && !it.isAlias }.flatMap { info ->
+            info.supportedTypes.filter {
+                it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, true) || it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true)
+            }.mapNotNull { type ->
+                val caps = runCatching { info.getCapabilitiesForType(type) }.getOrNull() ?: return@mapNotNull null
+                val video = caps.videoCapabilities
+                json(
+                    "name" to info.name,
+                    "mime" to type,
+                    "hardwareAccelerated" to info.isHardwareAccelerated,
+                    "colorFormats" to JSONArray(caps.colorFormats.toList()),
+                    "profileLevels" to JSONArray(caps.profileLevels.map { json("profile" to it.profile, "level" to it.level) }),
+                    "bitrateRange" to video?.bitrateRange?.toString(),
+                    "widths" to video?.supportedWidths?.toString(),
+                    "heights" to video?.supportedHeights?.toString(),
+                    "sizeAndRate" to JSONObject().apply {
+                        probePoints.forEach { (w, h, fps) ->
+                            put("${w}x${h}@$fps", video?.areSizeAndRateSupported(w, h, fps.toDouble()) == true)
+                        }
+                    },
+                )
+            }
+        })
+    }
+
+    private fun physicalCameraInventory(): JSONArray {
+        val ids = runCatching { caps.physicalCameraIds }.getOrDefault(emptySet()).sorted()
+        return JSONArray(ids.map { physicalId ->
+            val pCaps = runCatching { manager.getCameraCharacteristics(physicalId) }.getOrNull()
+            val pMap = pCaps?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            json(
+                "id" to physicalId,
+                "focalLengthsMm" to JSONArray(pCaps?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.toList().orEmpty()),
+                "activeArray" to pCaps?.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.toString(),
+                "outputFormats" to JSONArray(pMap?.outputFormats?.toList().orEmpty()),
+                "raw10Sizes" to JSONArray(runCatching { pMap?.getOutputSizes(ImageFormat.RAW10)?.map { it.toString() } }.getOrNull().orEmpty()),
+                "rawSensorSizes" to JSONArray(runCatching { pMap?.getOutputSizes(ImageFormat.RAW_SENSOR)?.map { it.toString() } }.getOrNull().orEmpty()),
+                "vendorKeyCount" to (pCaps?.let { c -> c.keys.count { !it.name.startsWith("android.") } } ?: 0),
+            )
+        })
+    }
+
+    private fun vendorKeyInventory(characteristics: CameraCharacteristics): JSONObject {
+        fun nonAndroid(names: List<String>) = JSONArray(names.filterNot { it.startsWith("android.") }.distinct().sorted())
+        return json(
+            "characteristics" to nonAndroid(runCatching { characteristics.keys.map { it.name } }.getOrDefault(emptyList())),
+            "request" to nonAndroid(runCatching { characteristics.availableCaptureRequestKeys.map { it.name } }.getOrDefault(emptyList())),
+            "result" to nonAndroid(runCatching { characteristics.availableCaptureResultKeys.map { it.name } }.getOrDefault(emptyList())),
+            "session" to nonAndroid(runCatching { characteristics.availableSessionKeys.orEmpty().map { it.name } }.getOrDefault(emptyList())),
+        )
+    }
 }
