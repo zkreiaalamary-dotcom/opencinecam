@@ -198,6 +198,53 @@ class SurfaceEncoderPolicyTest {
             }
             .firstOrNull()
 
+    @Test
+    fun hisiliconHevcSelectsProfileAwareExplicitLevelFor4kAnd1080p120() {
+        val hisiProfiles = listOf(
+            pl(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCMainTierLevel4),
+            pl(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCMainTierLevel5),
+            pl(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCMainTierLevel51),
+            pl(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCMainTierLevel52),
+            pl(CodecProfileLevel.HEVCProfileMain10, CodecProfileLevel.HEVCMainTierLevel62),
+        )
+        val hisi = SurfaceEncoderInfo("OMX.hisi.video.encoder.hevc", true, false, true, listOf(hevc)) { _ ->
+            SurfaceEncoderCaps(
+                colorFormats = listOf(COLOR_FormatYUV420Flexible, COLOR_FormatSurface),
+                profileLevels = hisiProfiles,
+                sizeAndRateSupported = { w, h, fps ->
+                    w <= 4096 && h <= 4096 && w.toDouble() * h.toDouble() * fps <= 3840.0 * 2160.0 * 60.0
+                },
+            )
+        }
+        val qcom = codec(
+            name = "c2.qti.hevc.encoder",
+            hw = true,
+            types = listOf(hevc),
+            profiles = listOf(
+                pl(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCMainTierLevel51),
+                pl(CodecProfileLevel.HEVCProfileMain10, CodecProfileLevel.HEVCMainTierLevel51),
+            ),
+        )
+        val selector = VideoEncoderSelector()
+
+        val hisiMain104k30 = selector.selectSurfaceEncoder(SurfaceEncoderPolicy.HEVC_MAIN10_HARDWARE, 3840, 2160, 30, listOf(hisi).asSequence())
+        val hisiMain104k60 = selector.selectSurfaceEncoder(SurfaceEncoderPolicy.HEVC_MAIN10_HARDWARE, 3840, 2160, 60, listOf(hisi).asSequence())
+        val hisiMain101080p120 = selector.selectSurfaceEncoder(SurfaceEncoderPolicy.HEVC_MAIN10_HARDWARE, 1920, 1080, 120, listOf(hisi).asSequence())
+        assertEquals(CodecProfileLevel.HEVCMainTierLevel62, hisiMain104k30?.level)
+        assertEquals(CodecProfileLevel.HEVCMainTierLevel62, hisiMain104k60?.level)
+        assertEquals(CodecProfileLevel.HEVCMainTierLevel62, hisiMain101080p120?.level)
+
+        val hisiMain84k30 = selector.selectSurfaceEncoder(SurfaceEncoderPolicy.HEVC_MAIN_HARDWARE, 3840, 2160, 30, listOf(hisi).asSequence())
+        val hisiMain84k60 = selector.selectSurfaceEncoder(SurfaceEncoderPolicy.HEVC_MAIN_HARDWARE, 3840, 2160, 60, listOf(hisi).asSequence())
+        val hisiMain81080p120 = selector.selectSurfaceEncoder(SurfaceEncoderPolicy.HEVC_MAIN_HARDWARE, 1920, 1080, 120, listOf(hisi).asSequence())
+        assertEquals(CodecProfileLevel.HEVCMainTierLevel5, hisiMain84k30?.level)
+        assertEquals(CodecProfileLevel.HEVCMainTierLevel51, hisiMain84k60?.level)
+        assertEquals(CodecProfileLevel.HEVCMainTierLevel5, hisiMain81080p120?.level)
+
+        val qcomMain10 = selector.selectSurfaceEncoder(SurfaceEncoderPolicy.HEVC_MAIN10_HARDWARE, 3840, 2160, 30, listOf(qcom).asSequence())
+        assertNull(qcomMain10?.level)
+    }
+
     private fun pl(profile: Int, level: Int) = EncoderProfileLevel(profile, level)
 
     private fun codec(

@@ -160,6 +160,9 @@ fun MediaCodecInfo.asSurfaceEncoderInfo(): SurfaceEncoderInfo = SurfaceEncoderIn
 fun platformSurfaceEncoders(): Sequence<SurfaceEncoderInfo> =
     MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.asSequence().map { it.asSurfaceEncoderInfo() }
 
+/** True for HiSilicon OMX HEVC encoders that fail configure when KEY_LEVEL is omitted alongside KEY_PROFILE. */
+internal fun requiresExplicitHevcLevel(codecName: String): Boolean = codecName.contains(".hisi.", ignoreCase = true)
+
 class VideoEncoderSelector(private val correlationId: String = "video-encoder") {
     /**
      * Production Surface-encoder pick. Candidates are ordered hardware first, then by codec name;
@@ -199,9 +202,12 @@ class VideoEncoderSelector(private val correlationId: String = "video-encoder") 
                 codecName = info.name,
                 profile = profile,
                 hardwareAccelerated = info.hardwareAccelerated,
-                level = if (policy.profile == EncoderProfileRule.AVC_HIGH_ELSE_HIGHEST) {
-                    profileLevelsForSelected.maxOrNull()
-                } else null,
+                level = when {
+                    policy.profile == EncoderProfileRule.AVC_HIGH_ELSE_HIGHEST -> profileLevelsForSelected.maxOrNull()
+                    policy.mime.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true) && requiresExplicitHevcLevel(info.name) ->
+                        HevcEncoderLevels.selectHevcLevelForProfile(profile, width, height, fps, caps.profileLevels)
+                    else -> null
+                },
                 maxBitrateBps = caps.bitrateRangeUpperBps,
             )
         }
