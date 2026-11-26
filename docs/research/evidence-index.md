@@ -97,7 +97,18 @@ All 24 decoded MP4s report `yuv420p`, `color_range = tv` (Limited), `color_space
   - **`007..016`, `029..031` 4K60 GPU/LOG (`POWER_MODE_CONFOUNDED`):** All `13` attempts throttled to `47.80–48.30 fps` (`192–196` pkts, `46–50` drops, `11@60 -> 4/1` periodic metronome) even with GL `maxTotalUs = 14.92–15.18 ms` (`015`/`016`); must be re-tested with Power Saving OFF + `previewOnly` 4K60 control.
   - **`017/018`, `023/024/025`, `032/033`, `037` Direct 4K60 & 1080p60 (`22–27 °C`):** ALL **`OBSERVED`** (`0` drops), including **`018` `DIRECT_HEVC_SURFACETEXTURE 720p` 30 s (`1,786` pkts, `59.93 fps`)**, **`033` `360p` 30 s (`1,784` pkts, `59.93 fps`)**, **`024` `DIRECT_HEVC` 30 s (`1,801` pkts, `59.93 fps`)**, and **`037` `AVC 1080p60` (`245` pkts, `59.92 fps`)**.
   - **`019` & `020` Locked ISP (`20 ms`, `ISO 407`):** `GAMMA_2_2` (`max=199, 0%` clip) and `GAMMA_2_0` (`max=253, 0.056%` clip, `spread=221`) preserved highlights while `GAMMA_1_8..1_0` (`25.6%–64.8%`) and `FLAT`/`ROLLOFF`/`KIRIN_ATTENUATED` (`60.9–64.6%`) clipped.
-  - **`022` `ISP_CUVA_HDR_PROBE`:** Threw `IllegalArgumentException: Not an array: class java.lang.Byte`, isolating exact **`ByteArray` (`[B`)** requirement for `cuvaStateVideoMode`.
+- **`OpenCineCam-research (2).zip` (Latest Performance-Mode Export, `2026-11-27`):** `2,019,408,174` B (`1.88 GiB`), `SHA-256: 9278423C4ECD83625C5555D94E2305281A0A819DD290EE073C473F59C8E90428`, `5,902` entries across `17` runs (`001..047` in **`1795725149085-082c0332-9c36-41d0-bfb8-03f7e650e440`**).
+  - **Key `082c0332` Records (`local-1795724731646`, `PERFORMANCE`, cooler ON, `batt=30–32 °C`, `status<=1`):**
+    - `001`: `17` synthetic arms (`4 Main10 L6.2 egl8 PASS`, all `egl10` 0 pkts) + `ByteBuffer`: `YUV420Flexible` (`20,266 B`), `0x7F00000F` (`19,993 B`), **`0x7F000011` (`84,556 B`)**, all `spsBitDepthLuma=10`.
+    - `003..007`: 4K30 `OCLog2 Main10` (`29.99 fps`, `0` drops, `39.7–39.8 Mbps`, `yuv420p10le`); `004 (gamma_2_0)` Y=[13..975] (`884/1024` distinct); `005 (gamma_2_2)` Y=[24..878] (`807/1024` distinct); `007 (FLAT)` YLOW=582 / YAVG=841.8.
+    - `009 (4K60 PREV, encoder idle)`: `CAM_CB=240` (`59.43 fps`), `glFrames=191`, `glGaps=45` (~48 fps) despite `maxTotalUs=1.852 ms`.
+    - `010..019, 032..034` (`4K60 GPU/LOG`): `47.60–48.04 fps` (`47–49` drops) with `CAM_CB 59.93 fps` (`0` drops).
+    - `020/021, 026/027, 028, 035/036` (`Direct 4K60` 4s & 30s): **`59.92–59.97 fps`, `0` drops** across single-target, `720p ST`, and `360p ST`!
+    - `022, 023` (`10/20 ms, ISO 504` locked): `GAMMA_2_6..2_0` (`0%` clip) vs `GAMMA_1_8` (`13.56%`), `GAMMA_1_0` (`71.60%`), `FLAT` (`74.85%`).
+    - `025 (ISP_CUVA_HDR_PROBE)`: `cuvaStateVideoMode = ByteArray[1]` accepted (`hwBufferFormat: 34 -> 804 (0x324)`), `highlightClip: 0.00118 -> 0.0`, `mean: 144.72 -> 160.28`.
+    - Ghost run isolated: `1795684064118-c8959e8a-db77-4540-beae-32dfa8dc4f49` (1 `STOPPED` attempt, `PAUSED`, `v2`) caused false UI checkpoint banner after `082c0332` `COMPLETED`.
+
+- **`022` `ISP_CUVA_HDR_PROBE`:** Threw `IllegalArgumentException: Not an array: class java.lang.Byte`, isolating exact **`ByteArray` (`[B`)** requirement for `cuvaStateVideoMode`.
 
 ---
 

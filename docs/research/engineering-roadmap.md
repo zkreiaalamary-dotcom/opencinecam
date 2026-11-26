@@ -22,14 +22,16 @@ Grounded in verified findings from `تجربه1` (Runs 0–2) and `تجربه2` 
 
 ## 2. Phased Implementation Plan
 
-### Phase 1 — Power-Aware, Unlimited-Budget, Checkpoint-Resilient Research Lab *(Implemented & Host-Verified 2026-11-26; On-Device Verification Next)*
-1. **Removed Fixed `36/54` & `300s` Caps (`ResearchLaboratory.kt`):** Deleted `LabSessionBudget` (`DEFAULT_MAX_CORE_ATTEMPTS = 36`, `DEFAULT_MAX_ADAPTIVE_FOLLOWUPS = 18`) and `TIME_SLICE_LIMIT_MS`; replaced with state-signature `LabExplorationGuard` (allows unlimited unique/adaptive experiments while preventing duplicate or interrupt loops) + tiered Stage F pruning of redundant missing-level HEVC permutations.
-2. **Fixed `32°C` Thermal Halt (`LabTelemetry.kt`, `ResearchLaboratory.kt`):** Replaced the `MODERATE` `45 s` `HardStop` and trend abort with battery hysteresis (`< 40.0 °C` full speed whenever OS status `< SEVERE`; pause + **auto-resume** at `<= 35.0 °C && OS status < SEVERE` without restarting or losing completed attempts), plus normalized `batteryTempRaw`/`sysZonesC` units.
-3. **Permanent Checkpoint & Resume (`LabCheckpoint.kt`, `LabJournal.kt`, `ResearchLabScreen.kt`):** Schema-v3 `checkpoint.json` + `active_session.json` + `latestResumable` (skipping abandoned `0`-attempt runs like `f8d3e998`), per-attempt `inFlightAttempt` crash/reboot/APK-upgrade recovery, explicit Resume vs New Session confirmation dialog preserving all archived runs, and dynamic `"X done · Y remaining"` UI progress.
-4. **Power & Performance Mode Instrumentation (`LabPowerProfile.kt`, `LabReportGenerator.kt`):** Tracks `PowerManager.isPowerSaveMode`, Huawei `SmartModeStatus` hint, CPU governor frequencies, and manual Performance/Normal/PowerSaving chips with `POWER_MODE_CONFOUNDED` warnings in reports.
-5. **Scientific Breakthroughs & Upgraded Discriminators:** Added `H-11` (`LOG_REGULAR_4K60 previewOnly=true`), `H-12` (10-bit ramp encode test for admitted HiSilicon `0x7F00000F/11` `ByteBuffer` formats), `setVendorByteOrIntKey` `ByteArray`-first CUVA HDR Vivid (`0/1/2` + `sessionParameters` + companion `PRIVATE`), `gamma_2_0`/`gamma_2_2` 4K30 LOG + `CONTRAST_CURVE_MINUS_1EV` + `2.6..1.0` sweep, and `1080p120` explicit-level codec admission (`LabCodecLevelPair.kt`).
+### Phase 1 — Power-Aware, Unlimited-Budget, Checkpoint-Resilient Research Lab & Performance-Mode Baseline `082c0332` *(Verified on Device 2026-11-27)*
+1. **Removed Fixed `36/54` & `300s` Caps + `082c0332` Full Execution:** Deleted `LabSessionBudget` and `TIME_SLICE_LIMIT_MS`; `082c0332` executed **`47/47` planned stages (`26 OBSERVED`)** cleanly with `0` thermal pauses (`30–32 °C`, `status<=1`) under Performance Mode ON.
+2. **UI/Resume Fixes (Wave 1 Stage 2):** Fixed stale `"46 done · 1 remaining"` completion progress (missing final `onProgress` emission at `next == null`) and stopped `LabJournal.latestResumable` from resurrecting abandoned zero-progress legacy v2 runs (`c8959e8a`) after `082c0332` `COMPLETED`. Fixed `LabDecode` 8-bit truncation provenance and `bestLogRecipeSummary` ranking (`gamma_2_0`/`gamma_2_2` > `FLAT`).
+3. **Key Empirically Proven Unlocks Ready for Phase 2/3:**
+   - **CUVA HDR Vivid (`0x324`):** `cuvaStateVideoMode = ByteArray[1]` accepted (`0%` highlight clip, `hwBufferFormat 34 -> 804`).
+   - **Calibrated `4K30 OCLog2 Main10` (`gamma_2_0` / `gamma_2_2`):** `29.99 fps`, `0` drops, `Y=[13..975]` / `[24..878]`.
+   - **Direct `4K60 HEVC Main10 / Main` (incl. `720p`/`360p SurfaceTexture` preview):** `59.92–59.97 fps`, `0` drops for `30 s` (`021`, `027`, `036`).
+   - **`48 FPS` `4K60 SurfaceTexture` Wall Isolated (`H-11` REFUTED):** Encoder-idle `009` (`maxTotalUs=1.852 ms`) proved Camera2 -> `4K60 SurfaceTexture` itself drops `191/240` frames (`45` gaps) independently of Power Mode; isolated hardware probes (`ImageReader USAGE_VIDEO_ENCODE`, `cameraSessionSceneMode=28/31`, `EGL_IMG_context_priority`, hidden `RAW_SENSOR`, `0x7F000011` ByteBuffer) now execute directly on connected `LMR-LX9`.
 
-### Phase 2 — Device Verification of `Main10` (`001` & `002`) & `4K60 GPU HEVC` (`004`)
+### Phase 2 — Live Hardware Breakthrough Probes & Validation (`53K0226129002419`, Wave 1 Stage 3)
 1. Run fixed Lab APK on `LMR-LX9`:
    - Execute fixed `001` matrix to get empirical **synthetic Main10 10-bit ramp (`effectiveBitsEstimate`), geometry, Level (`5.0/5.1` vs `6.2`), and EGL (`RGBA1010102` vs `RGBA8888`)** verdicts.
    - Run `003`/`004` with valid bitrate (`<= 80 Mbps` for 4K60) to verify `GPU_HEVC_4K60` (`Main8`) and apply winning Main10 recipe to `LOG_REGULAR_4K30` & `LOG_REGULAR_4K60`.

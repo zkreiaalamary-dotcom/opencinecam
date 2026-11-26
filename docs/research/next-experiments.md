@@ -1,30 +1,24 @@
 # Next Discriminating Experiments (`LMR-LX9`, Pura 80 Pro)
 
-Prioritized after `7d0db6a5` (`49` attempts under Power Saving Mode ON) & `f8d3e998` (`32°C MODERATE` halt) in the cap-free, auto-resuming Research Lab (`LabExplorationGuard`, `LabCheckpointState`, `LabPowerProfile`, `40°C pause -> 35°C auto-resume`).
-
-**Mandatory Prerequisite on Device Before Running:** Turn **OFF** Android/Huawei Power Saving Mode, enable **Huawei Performance Mode**, tap the **`Performance`** chip in the Lab UI (`lab-power-PERFORMANCE`), and tap **Start new session** (for a clean non-throttled baseline) or **Resume session** to finish any paused session.
+Updated after **`082c0332` (`47/47` Performance-Mode run)** + live Kirin 9020 `dumpsys` audit (`2026-11-27`). Targeted empirical hardware probes (`Pura80BreakthroughProbeTest` on `.debug.test`, preserving `.researchlab` intact) directly resolve every remaining high-impact unknown.
 
 ---
 
-## Top 5 Priority Experiments (Automated in `LabAutonomousPlanner`)
+## Top 5 High-Impact Hardware Breakthrough Probes
 
-### 1. Power-Clean `4K60 SurfaceTexture` Drain-Only Control (`H-11`) & `4K60 OCLog2/GPU` Escalation (`Stage C`)
-- **Proven Prerequisite (`7d0db6a5`):** Under Power Saving ON, all 13 `4K60` GPU/LOG runs dropped to `47.80–48.30 fps` (`11@60 -> 4/1` periodic metronome) even when GL took `14.9–15.2 ms < 16.69 ms`. Meanwhile cooled `DIRECT_HEVC_SURFACETEXTURE` (`720p` & `360p`) and `DIRECT_HEVC` sustained **`59.93 fps` for 30 s with `0` drops**.
-- **New Discriminator Sequence:**
-  1. `LOG_REGULAR_4K60 previewOnly = true` (`regular_log_preview_diag`): runs Camera2 -> `SurfaceTexture` -> GL preview with **encoder idle** for 4 s to separate Camera2/SurfaceTexture 4K60 delivery from MediaCodec `RGBA->YUV` backpressure and Power Saving throttling.
-  2. Full `LOG_REGULAR_4K60` & `GPU_HEVC_4K60` ladder (`realtime`, `single_ctx`, `prev_30fps`, `no_preview`, `bitrate_45m`, `egl8`, `novui`, `scopes_pbo`) + 10 s sustained on any `OBSERVED` winner.
+### 1. Break the `48 FPS` `4K60 SurfaceTexture` Wall (`probe1_4k60CameraInputIsolation`)
+- **Why (`082c0332-009..019`):** Even with Power Saving OFF, Performance Mode ON, and encoder completely idle (`1.852 ms` GL frame), Camera2 -> `4K60 SurfaceTexture` drops from `59.43–59.93 fps` (`CAM_CB`) to `48.0 fps` (`191` frames, `45` gaps). Meanwhile `Direct MediaCodec` + `720p/360p SurfaceTexture` sustains `59.92 fps` (`0` drops) for `30 s`!
+- **Arms:** Compare `SurfaceTexture` control vs `ImageReader(PRIVATE, maxImages=6)` with: (a) `USAGE_GPU_SAMPLED_IMAGE`, (b) `USAGE_GPU_SAMPLED_IMAGE | USAGE_VIDEO_ENCODE`, (c) `USAGE_VIDEO_ENCODE`, (d) Huawei `cameraSessionSceneMode = 28 / 31` (`hwVideoRecordingPrev60FpsScene=[28,31,68]`), and (e) `SurfaceTexture` + `360p USAGE_VIDEO_ENCODE` companion.
 
-### 2. True >8-bit `ByteBuffer` Vendor Format Encoding (`H-12`, `0x7F00000F` / `0x7F000011` + `YUV420Flexible`) (`Stage A 001`)
-- **Proven Prerequisite (`7d0db6a5-001`):** `HISI_VENDOR_0x7F00000F (2130706447)`, `HISI_VENDOR_0x7F000011 (2130706449)`, and `YUV420Flexible` ALL admitted (`admitted=true`) on `OMX.hisi.video.encoder.hevc Main10 L6.2`.
-- **Upgrade:** `probeVendor10BitByteBufferAdmission` now queries buffer capacity (`bytesPerPixel`), encodes 15 synthetic ramp frames, muxes to MP4, and inspects `rampEffectiveBits` (`>= 9`?) and `mod4ZeroFraction`!
+### 2. Live **CUVA HDR Vivid (`0x324`)** Direct & GPU Recording (`probe2_CuvaHdrDirectAndGpuRecording`)
+- **Why (`082c0332-025`):** `cuvaStateVideoMode = ByteArray[1]` switched companion `PRIVATE` buffer `34 -> 804 (0x324)` and drove highlight clipping to `0.0%` (`144.7 -> 160.3`).
+- **Arms:** Record real MP4s (Direct 4K30 CUVA OFF vs ON under locked exposure, **Direct 4K60 HLG/Main10 WITH CUVA ON**, and **GPU 4K30 CUVA ON**) and inspect with `ffprobe` + 10-bit `yuv420p10le` `Y`-plane code distribution & luma headroom!
 
-### 3. Fixed `ISP_CUVA_HDR_PROBE` (`ByteArray` `[B` States `0/1/2` + `sessionParameters` + Companion `PRIVATE`) (`Stage E`)
-- **Proven Prerequisite (`7d0db6a5-022`):** Exact failure `"Not an array: class java.lang.Byte"` proved `com.huawei.capture.metadata.cuvaStateVideoMode` requires `ByteArray`.
-- **Upgrade:** `runCuvaHdrProbe` sets `byteArrayOf(0/1/2)` with `SessionConfiguration.sessionParameters`, reads back `CaptureResult`, and inspects companion `ImageFormat.PRIVATE` `HardwareBuffer` format/usage/DataSpace under `CUVA_STATE_1`.
+### 3. Camera-Closed `4K60` Synthetic `Main10 L6.2` Throughput + EGL Priority (`probe3_Synthetic4k60ThroughputAndPriority`)
+- **Why:** Isolate whether `OMX.hisi.video.encoder.hevc` itself sustains `60.0 fps` at `4K60` (`Main10 L6.2` vs `Main8 L5.2`) when freed from Camera2 `SurfaceTexture`, and measure `EGL_IMG_context_priority` (`HIGH`) + `KEY_PRIORITY=0` + `KEY_OPERATING_RATE=60` on swap time (`15.5–17.7 ms` -> `< 16.6 ms`?).
 
-### 4. Kirin High-Gamma (`2.6 / 2.4 / 2.2 / 2.0 / 1.8 / 1.0`), `-1 EV` Curve, & Live `gamma_2_0`/`gamma_2_2` 4K30 LOG (`Stage B` & `E`)
-- **Proven Prerequisite (`7d0db6a5-019/020`):** `GAMMA_2_0` (`0.056%` clip, `spread=221`) and `GAMMA_2_2` (`0%` clip) hold full highlights while `FLAT`/`ROLLOFF`/`GAMMA<=1.8` clip `25–65%`.
-- **Upgrades:** Live 4K30 `LOG_REGULAR` variants `gamma_2_0` & `gamma_2_2` + locked-exposure `CONTRAST_CURVE_MINUS_1EV` (`baseExp / 2`) + extended `2.6..1.0` sweep.
+### 4. Hidden `RAW_SENSOR (32)` / `hwInconsistentRawStream` Probe (`probe4_HiddenRawSensorAdmission`)
+- **Why (`dumpsys media.camera`):** Logical/physical characteristics hide RAW from `SCALER_STREAM_CONFIGURATION_MAP`, yet expose `hwCaptureRawStreamConfigurations = [32, 8192, 6144, 0]` / `[32, 8000, 6016, 0]`, `hwCaptureRawFormat = 32`, and `hwInconsistentRawStreamSupported = 1`.
 
-### 5. Tiered Cumulative Reference Audit With Auto-Resuming `40°C / 35°C` Thermal Protection & Persistent Checkpoints
-- **Upgrades:** Runs uninterrupted across Stages A–F (>36 attempts without arbitrary termination), pauses gently at `>= 40°C` / `SEVERE`, auto-resumes at `<= 35°C`, and preserves progress across restarts/crashes/reboots/APK upgrades via `checkpoint.json` & `active_session.json`.
+### 5. `0x7F000011` (`84.5 KB`) vs `0x7F00000F` / `YUV420Flexible` True 10-Bit Ramp Encode (`probe5_VendorByteBuffer10BitClips`)
+- **Why (`082c0332-001` & `LabDecode` bug):** `0x7F000011` emitted `84,556` B (`4.2×` `0x7F00000F` / `YUV420Flexible`) with `spsBitDepthLuma=10`, but `LabDecode`'s `COLOR_FormatYUV420Flexible` truncated decoded frames to 8-bit. Encode NV12 / planar I420 / packed-10-bit ramps and pull MP4s for host `ffmpeg yuv420p10le` inspection!
