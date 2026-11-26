@@ -1,52 +1,39 @@
 # Next Discriminating Experiments (`LMR-LX9`, Pura 80 Pro)
 
-Prioritized to eliminate maximum uncertainty per experiment minute while avoiding all 7 bugs found in Runs 1–3. Every experiment isolates **one controlled variable**, locks `AE`/`AWB`/`ISO`/`Shutter` where image brightness is compared, and stays off `main`.
+Prioritized after `نتايج\جديد` (`Run A a26cd8da`, `Run B 922a793c`) and implemented in the unlimited-session Research Lab APK on `research/autonomous-log-lab` (`LabSessionBudget`: `36` core + `18` adaptive = `54` max attempts, `TIME_SLICE_LIMIT_MS` removed).
 
 ---
 
-## Top 5 Priority Experiments (High Discrimination, Low Cost)
+## Top 5 Priority Experiments (Now Automated in `LabAutonomousPlanner`)
 
-### 1. Fix & Re-Run `CODEC_SYNTHETIC_MATRIX` + `Main10 Level 6.2` Arm (`001`)
-- **Fixes Required Before Running (Lab-only):**
-  1. Add `.trimIndent()` to `SYNTHETIC_VERTEX_SHADER` and `SYNTHETIC_FRAGMENT_SHADER` in `LabSyntheticEncoderProbe.kt:491-504` (fixes GLSL `P0005` error).
-  2. Add arm `main10_l62_4k30_egl10` and `main10_l62_4k60_egl10` with explicit `HEVCMainTierLevel62` (`16777216`, matching `inventory.json`'s exact `2:16777216` capability entry), plus `main10_l51_oclog2_lim_4k30_egl10_nodrop` and 0-byte file cleanup on failure.
-- **What It Discriminates Immediately (Camera Closed — ~8 seconds total):**
-  - Does `OMX.hisi.video.encoder.hevc` Main10 encode actual frames (non-zero MP4) on `RGBA1010102` Surface, or only on `RGBA8888` (`egl8`)?
-  - Does `Level 6.2 (16777216)` vs `Level 5.0/5.1` fix the **0-packet output** bug seen in `002/016`?
-  - Does `BT2020_LINEAR_EXT` or `COLOR_RANGE_FULL` vs `LIMITED` cause half-frame repeat geometry, dropped frames, or success?
-  - Using Q1 synthetic linear ramp (`analyzeRampPrecision`): proves **quantization bit depth** (`effectiveBitsEstimate >= 9`, `mod4 != 0` = true 10-bit vs shifted 8-bit)!
+### 1. Zero-Drop `4K60 OCLog2 HEVC Main 10` GL Optimization Ladder (`Stage C`)
+- **Proven Prerequisite:** Camera2 already delivers `59.94 fps` (`0` sensor drops in `R-B 006/008/012`); `OpenCineLogFrameDiagnostics` localized drops strictly to the GL thread (`maxTotal=32.289 ms > 16.69 ms`, `encDraw=14.612 ms`, `encSwap=18.651 ms`, `prev=5.3 ms` + dual `EGLContext` switch).
+- **Single-Variable Escalation Ladder:**
+  1. `realtime`: Inject `KEY_PRIORITY=0` + `KEY_OPERATING_RATE=60` on `OMX.hisi.video.encoder.hevc` (`enableRealtimeCodecKeys=true`).
+  2. `single_ctx`: Eliminate per-frame `EGLContext` switch when using `egl8` (`singleContextWhen8Bit=true` reusing cached `makeCurrent`).
+  3. `prev_30fps`: Decimate UI preview rendering (`previewFpsDivisor=2`) while keeping full `60 fps` encoder output.
+  4. `no_preview`: Headless `previewOnly=false` zero-UI baseline isolate.
+  5. `bitrate_45m`: Reduce `4K60` bitrate from `60–80 Mbps` to `45 Mbps` to isolate encoder swap backpressure.
+- **Success Criterion:** Sustain `>= 59.8 fps` (`0` GL/muxer drops) first for 4 s, then 10–30 s on `LOG_REGULAR_4K60` with `oclog2_full` Main10 (`L6.2`).
 
-### 2. Fixed-Bitrate 4K60 `GPU_HEVC` + `LOG_REGULAR` (`30` & `60` fps Single-Variable Matrix)
-- **Prerequisite:** Bypass `RecordingDataRate.gpuVideoBps()` double-multiplier in `LabRegularLogRunner` / pipeline cap (`<= 80 Mbps` or `<= 100 Mbps`, not `120 Mbps`), AND wire `gpu.onRecordedFrame = signals::onRecordingFrame` in `LabRegularLogRunner` so `gpu` cadence timestamps are recorded.
-- **Arms (~20 seconds total):**
-  - `Arm A`: `GPU_HEVC_4K60` (`Main8`, `L5.1=65536`, `60 Mbps`, `EGL8`) — tests whether production `OpenCineLogGpuPipeline` + Camera2 sustains **4K60 HEVC via GPU** now that 4K30 (`003`) succeeded!
-  - `Arm B..D`: `LOG_REGULAR_4K30` (`Main10`, `40 Mbps`) injecting the exact winning recipe from Experiment #1 (`Level 6.2` vs `L5`, `EGL10` vs `EGL8`, `FULL` vs `LIMITED`, `with/without BT2020_LINEAR_EXT`).
-  - `Arm E`: If Arm B succeeds cleanly at 4K30, immediately escalate to `LOG_REGULAR_4K60` at `60–80 Mbps`.
-- **Decision Unlock:** Unlocks production **4K30/4K60 HEVC Main** AND establishes whether **real Camera2 -> GLES -> Main10 OCLog2** succeeds or hits an OMX-specific camera surface constraint.
+### 2. True >8-bit Input Precision: `EGL10` ColorSpaces / `FP16` / Dither & HiSilicon `ByteBuffer` 10-bit Probe (`Stage A 001`)
+- **Proven Prerequisite:** `Main10 L6.2 + egl8` (`8-bit` input -> `10-bit` HEVC) is proven at 4K30 & 4K60 (`bits=8`), while `RGBA1010102` with `cs=null` & `BT2020_LINEAR_EXT` produced `0` encoded packets (`R-B 001`).
+- **New Synthetic Arms Added (`LabSyntheticEncoderProbe`):**
+  1. `main10_l62_4k30_egl10_hlg` (`EGL_GL_COLORSPACE_BT2020_HLG_EXT = 0x3540`) & `main10_l62_4k30_egl10_pq` (`EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340`).
+  2. `main10_l62_4k30_egl16f` (`EGL_RGBA_16F`).
+  3. `main10_l62_4k30_egl8_dither` (ordered/triangular dither into `Main10 L6.2 + egl8` to avoid 8-bit contour banding if `egl10` remains blocked).
+  4. Camera-closed HiSilicon `ByteBuffer` 10-bit probe (`0x7F00000F`, `0x7F000011`, `YUV420Flexible`).
+- **Decision Unlock:** Proves whether `OMX.hisi.video.encoder.hevc` accepts ANY true `>= 10`-bit producer (`bits >= 9`, `mod4 != 0`) via GL Surface or `ByteBuffer`!
 
-### 3. Safe Isolated `SOURCE_FORMAT_PROBE` + Physical Cameras + Hidden `YCBCR_P010` / `PRIVATE` Introspection
-- **Fixes Required:**
-  1. **Remove or quarantine `TONEMAP_PRESET_CURVE_SRGB (4)`** from `ISP_COLOR_CORRECTION_PROBE` (or place `SOURCE_FORMAT_PROBE` **before** it, with per-camera retry + `cameraserver` recovery wait and explicit `FAILED` if `cameras.isEmpty()`).
-  2. Probe Camera `"0"`, `"2"` (main 8.5 mm), `"4"` (ultrawide 1.95 mm), `"5"` (tele 15 mm) individually.
-- **What It Discriminates:**
-  - True `HardwareBuffer.format` and `DataSpace` of Camera 0 / 2 / 4 / 5 `ImageFormat.PRIVATE` and `YUV_420_888` streams (specifically checking whether `PRIVATE` uses 8-bit `YCbCr_420_888`/`IMPLEMENTATION_DEFINED` vs 10-bit `P010` under API 31!).
-  - Whether `YCBCR_P010 (54)` or `RAW_SENSOR (32)` / `RAW10 (37)` works on any individual physical camera (`"2"`, `"4"`, `"5"`) despite absence on logical `"0"`.
-  - Read values of vendor result keys (`hw_algo_ae_lv`, `hw_algo_mean_y`, `frameLuminance`, `multiCameraMask`) across preview & `cuvaStateVideoMode` admission testing!
+### 3. Kirin Post-Gamma `TONEMAP` Gamma Sweep & `kirinGammaAttenuatedRolloffCurve` (`Stage E`)
+- **Proven Prerequisite:** Locked-exposure (`16.666 ms`, `ISO 580–581`) `R-B 022/023` proved Kirin `TONEMAP_CURVE` acts in **post-gamma** space (`GAMMA_1_0` clipped `75.2%`, `SAFE_LINEAR_ROLLOFF` clipped `74.8%`), whereas **`TONEMAP_MODE_GAMMA_VALUE = 2.2` recovered `100%` highlights (`0%` clip, `max=172`, `p99=143`)**.
+- **New Locked-Exposure Arms (`LabSourceProbe`):**
+  1. Gamma sweep `2.2`, `2.0`, `1.8`, `1.6`, `1.4`, `1.2`, `1.0` under `TONEMAP_MODE_GAMMA_VALUE (3)` to find the exact minimum gamma that preserves dynamic range without highlight saturation.
+  2. `kirinGammaAttenuatedRolloffCurve` (post-gamma safe shoulder curve `out <= 0.72` at `in = 1.0`, avoiding the `FLAT` overshoot) + 4K30 `LOG_REGULAR` `gamma_1_8` integration (`LabRegularLogRunner`).
 
-### 4. Locked-AE Optical Calibration Sweep: `GAMMA_2_2` (`TONEMAP=3`) vs `TRANSFORM_MATRIX` (`CC=0`) vs Safe Linear `CONTRAST_CURVE` vs Default (`4K30`)
-- **Critical Methodology Fix (Missing in Runs 2–3):** Lock `CONTROL_AE_MODE = OFF` with fixed `SENSOR_EXPOSURE_TIME`, `SENSOR_SENSITIVITY` (ISO), `CONTROL_AWB_MODE = OFF` (`RggbChannelVector` locked), and fixed `LENS_FOCUS_DISTANCE` against a **static grayscale step-chart + ColorChecker under constant flicker-free illumination** (no auto-brightness monitor changes, no hand movement).
-- **Arms (`YUV_420_888` + `GPU_HEVC_4K30` saved clips so full RGB/luma/chroma analysis can run offline!):**
-  1. Baseline (`TONEMAP=FAST(1)`, `CC=HIGH_QUALITY(2)`)
-  2. `TONEMAP=GAMMA_VALUE(3)` (`TONEMAP_GAMMA = 2.2` and `1.0` — test if `gamma=1.0` gives linear sensor output!)
-  3. `CC=TRANSFORM_MATRIX(0)` + `TONEMAP=GAMMA_VALUE(3)` (linear or `2.2` matrix + tone curve = bypassed consumer look!)
-  4. Re-designed gentle linear-domain `CONTRAST_CURVE` (monotonic log-shoulder `out <= in` highlights instead of sRGB-knots-in-linear-domain `FLAT`).
-- **What It Discriminates:**
-  - Can manual `TRANSFORM_MATRIX + GAMMA_VALUE` bypass Huawei's aggressive consumer sharpening, contrast S-curve, and highlight compression to create a **true low-contrast camera-native LOG pre-grade feed**, eliminating the `44–69%` highlight clipping seen in `008`?
-  - Measures genuine usable highlight headroom (clipped steps vs unclipped steps under **identical fixed exposure**!).
+### 4. Vendor `cuvaStateVideoMode` (HDR Vivid) Live Admission & Pixel/Metadata Probe (`Stage E`)
+- **New `LabPath.ISP_CUVA_HDR_PROBE` (`LabSourceProbe.runCuvaHdrProbe`):**
+  - Captures baseline (`cuvaStateVideoMode = 0` or unset) vs `1` vs `2` on `TEMPLATE_RECORD` (`PRIVATE` + `YUV_420_888`), reading back `CaptureResult` / `TotalCaptureResult` `cuvaStateVideoMode`, dynamic range, `hw_algo_*` vendor tags, and output `HardwareBuffer` format/DataSpace to test whether EMUI 15's native HDR Vivid pipeline can be unlocked safely on API 31.
 
-### 5. `cuvaStateVideoMode` Vendor HDR Vivid & Dual-Output 4K60 Preview Downscale Probe
-- **Part A (`com.huawei.capture.metadata.cuvaStateVideoMode`):**
-  - Read its current values in `TotalCaptureResult` / test non-invasive session parameter admission (`0`, `1`, `2`) on `CameraDevice.TEMPLATE_RECORD` + `ImageFormat.PRIVATE` (`SurfaceTexture` / `ImageReader`), inspecting `HardwareBuffer.format`, `DataSpace`, and whether 10-bit HDR Vivid source buffers activate on EMUI 15 API 31 even without API 33 `DynamicRangeProfiles`!
-- **Part B (`4K60` Preview Resolution Isolation & `1080p60` Thread Split):**
-  - Run `DIRECT_HEVC_SURFACETEXTURE` 4K60 comparing preview target sizes `1280x720` vs `640x360` (matching HAL/GPU workload hypothesis for the `4–9` camera drops in `005/006/012`).
-  - Run `GPU_HEVC_1080p60` (and `AVC_1080p60`) with `scopeAnalysis = OFF` vs `ON` (`glReadPixels` stall test!) to test whether synchronous `glReadPixels` in `renderScopeAnalysisIfDue()` or encoder backpressure caused the `10–13` drops in `019/021`.
+### 5. Clean Unlimited-Session Multi-Stage Verification + Checkpoint Resume
+- Because `TIME_SLICE_LIMIT_MS = 300_000L` is now permanently deleted, verify full uninterrupted execution up to the adaptive budget (`54` max attempts, gated strictly by thermal hysteresis, `25%` battery reserve, `5 GiB` disk safety reserve, and `20 GB` lab budget) plus checkpoint resume across app restart (`checkpoint.json`).

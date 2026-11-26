@@ -412,6 +412,9 @@ data class ResearchEncoderOverride(
     val disableVuiRewrite: Boolean = false,
     val useAsyncPboScopes: Boolean = false,
     val enableFrameDiagnostics: Boolean = false,
+    val enableRealtimeCodecKeys: Boolean = false,
+    val singleContextWhen8Bit: Boolean = false,
+    val previewFpsDivisor: Int = 1,
 )
 
 data class BitrateResolution(
@@ -487,6 +490,10 @@ class OpenCineLogGpuPipeline(
     private var context: EGLContext = EGL14.EGL_NO_CONTEXT
     private var previewContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var pbuffer: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var currentEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var currentEglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var active8BitRenderConfig: Boolean = false
+    private var recordingFrameSequence: Long = 0L
     private var config8: EGLConfig? = null
     private var config10: EGLConfig? = null
     private var previewNativeSurface: Surface? = preview
@@ -1069,6 +1076,10 @@ class OpenCineLogGpuPipeline(
                     if (timelapse != null || projectRateOverride != null) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                     setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+                    if (researchEncoderOverride?.enableRealtimeCodecKeys == true) {
+                        setInteger(MediaFormat.KEY_PRIORITY, 0)
+                        setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps)
+                    }
                     if (hlgOutput) {
                         setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
                         setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
@@ -1157,6 +1168,7 @@ class OpenCineLogGpuPipeline(
                             else -> null
                         },
                         hlgOutput = hlgOutput, hdr10Output = hdr10Output,
+                        eglRenderTargetBits = if (eglPolicy.use8BitConfig) 8 else 10,
                         lens = appliedLens?.let { LensTakeUsage(it, lensSplicedSha(hlgOutput, hdr10Output)) },
                         exposureCompensation = if (appliedFrameGain) ExposureCompensationTakeUsage(lensSplicedSha(hlgOutput, hdr10Output)) else null,
                         sampleListener = sampleListener?.let(::GuardedEncodedSampleListener))
@@ -1309,6 +1321,7 @@ class OpenCineLogGpuPipeline(
         if (!eglPolicy.use8BitConfig && config10 == null) {
             error("A 10-bit RGBA EGL render target is required for honest Main10 LOG recording.")
         }
+        active8BitRenderConfig = eglPolicy.use8BitConfig
         val renderConfig = if (eglPolicy.use8BitConfig) requireNotNull(config8) else requireNotNull(config10)
         context = EGL14.eglCreateContext(
             display,
@@ -1484,6 +1497,7 @@ class OpenCineLogGpuPipeline(
                     active.exposureCompensation?.record(frameGain)
                     check(EGLExt.eglPresentationTimeANDROID(display, encoderEglSurface, selectedPts)) { "Encoder rejected presentation timestamp." }
                     check(EGL14.eglSwapBuffers(display, encoderEglSurface)) { "Encoder EGL swap failed." }
+                    recordingFrameSequence++
                     frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.ENCODER_SWAP)
                     if (!active.recordedFrameListenerFailed) onRecordedFrame?.let { report ->
                         try { report(timestampNs, selectedPts) } catch (problem: Exception) {
@@ -1526,7 +1540,15 @@ class OpenCineLogGpuPipeline(
                         width, height, previewOutput = false, outputGeometry = geometry, subjectLutOutput = true))
                 }
             }
-            if (previewNativeSurface?.isValid == true && previewEglSurface != EGL14.EGL_NO_SURFACE) {
+            val previewDivisor = researchEncoderOverride?.previewFpsDivisor ?: 1
+            val recActive = recording?.acceptFrames?.get() == true
+            val shouldRenderPreview = when {
+                !recActive -> true
+                previewDivisor <= 0 -> false
+                previewDivisor == 1 -> true
+                else -> (recordingFrameSequence % previewDivisor.toLong()) == 0L
+            }
+            if (shouldRenderPreview && previewNativeSurface?.isValid == true && previewEglSurface != EGL14.EGL_NO_SURFACE) {
                 runCatching {
                     check(makeCurrent(previewEglSurface)) { "Preview EGL window is unavailable." }
                     val width = querySurface(EGL14.EGL_WIDTH).coerceAtLeast(1)
@@ -2101,7 +2123,7 @@ class OpenCineLogGpuPipeline(
                         else if (active.candidate.mime == MediaFormat.MIMETYPE_VIDEO_HEVC) "Main"
                         else "AVC_${active.candidate.profile}",
                     codecFallback = codecFallbackReason,
-                    eglRenderTargetBits = if (passthroughSdr) 8 else 10,
+                    eglRenderTargetBits = active.eglRenderTargetBits,
                     codecName = active.candidate.codecName,
                     targetFps = targetFps,
                     sourceDataSpace = lastSourceDataSpace,
@@ -2147,16 +2169,36 @@ class OpenCineLogGpuPipeline(
                 check(makeCurrent(pbuffer)) { "Operator EGL window could not be unbound." }
             }
             check(EGL14.eglDestroySurface(display, previewEglSurface)) { "Operator EGL window did not retire." }
+            if (currentEglSurface == previewEglSurface) {
+                currentEglSurface = EGL14.EGL_NO_SURFACE
+                currentEglContext = EGL14.EGL_NO_CONTEXT
+            }
             previewEglSurface = EGL14.EGL_NO_SURFACE
         }
     }
 
-    private fun makeCurrent(surface: EGLSurface): Boolean = EGL14.eglMakeCurrent(
-        display,
-        surface,
-        surface,
-        if (surface == previewEglSurface) previewContext else context,
-    )
+    private fun targetContextFor(surface: EGLSurface): EGLContext =
+        if (surface == previewEglSurface && !(active8BitRenderConfig && researchEncoderOverride?.singleContextWhen8Bit == true)) {
+            previewContext
+        } else {
+            context
+        }
+
+    private fun makeCurrent(surface: EGLSurface): Boolean {
+        val targetCtx = targetContextFor(surface)
+        if (surface != EGL14.EGL_NO_SURFACE && surface == currentEglSurface && targetCtx == currentEglContext) {
+            return true
+        }
+        val ok = EGL14.eglMakeCurrent(display, surface, surface, targetCtx)
+        if (ok) {
+            currentEglSurface = surface
+            currentEglContext = targetCtx
+        } else {
+            currentEglSurface = EGL14.EGL_NO_SURFACE
+            currentEglContext = EGL14.EGL_NO_CONTEXT
+        }
+        return ok
+    }
 
     private fun linkProgram(vertexSource: String, fragmentSource: String): Int {
         fun compile(type: Int, source: String): Int {
@@ -2246,6 +2288,8 @@ class OpenCineLogGpuPipeline(
                     quad?.delete()
                     if (textureId != 0) GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
                     if (display != EGL14.EGL_NO_DISPLAY) check(EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT))
+                    currentEglSurface = EGL14.EGL_NO_SURFACE
+                    currentEglContext = EGL14.EGL_NO_CONTEXT
                     if (pbuffer != EGL14.EGL_NO_SURFACE) check(EGL14.eglDestroySurface(display, pbuffer))
                     if (previewContext != EGL14.EGL_NO_CONTEXT) check(EGL14.eglDestroyContext(display, previewContext))
                     if (context != EGL14.EGL_NO_CONTEXT) check(EGL14.eglDestroyContext(display, context))
@@ -2587,6 +2631,7 @@ class OpenCineLogGpuPipeline(
         val hlgOutput: Boolean,
         /** With [hlgOutput]: the signal is converted to PQ and the encoder runs in the HDR10 profile. */
         val hdr10Output: Boolean = false,
+        val eglRenderTargetBits: Int = 10,
         /** The lens table frozen at REC start with the counters of the frames encoded through it; null when no correction. */
         val lens: LensTakeUsage? = null,
         /** The per-frame exposure gain, on for the whole take when it was on at REC start; null when off. */

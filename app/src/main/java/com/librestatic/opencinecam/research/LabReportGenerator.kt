@@ -36,6 +36,7 @@ internal object LabReportGenerator {
             "bestDirect4k60Summary" to knowledge.bestDirect4k60Summary,
             "toneMapFlatVerdict" to knowledge.toneMapFlatVerdict,
             "colorCorrectionEmpiricalVerdict" to knowledge.colorCorrectionEmpiricalVerdict,
+            "cuvaHdrProbeVerdict" to knowledge.cuvaHdrProbeVerdict,
             "highPrecisionSourceAdmitted" to knowledge.highPrecisionSourceAdmitted,
             "stopReason" to stopReason,
             "storage" to json(
@@ -74,6 +75,7 @@ internal object LabReportGenerator {
             appendLine("- **True scene dynamic range verified:** `${knowledge.trueDynamicRangeVerified}`")
             appendLine("- **ISP ToneMap FLAT A/B verdict:** `${knowledge.toneMapFlatVerdict ?: "UNTESTED"}`")
             appendLine("- **ISP Empirical ColorCorrection / ToneMap probe:** `${knowledge.colorCorrectionEmpiricalVerdict ?: "UNTESTED"}`")
+            appendLine("- **Huawei CUVA HDR Vivid vendor probe:** `${knowledge.cuvaHdrProbeVerdict ?: "UNTESTED"}`")
             appendLine("- **High-precision non-YUV_420_888 source admitted:** `${knowledge.highPrecisionSourceAdmitted}`")
             inventory?.optJSONObject("colorCorrectionDiscovery")?.let { cc ->
                 appendLine("- **ColorCorrection API discovery (`SDK ${inventory.opt("sdkInt")}`):** `${cc.optString("inferenceStatus")}`")

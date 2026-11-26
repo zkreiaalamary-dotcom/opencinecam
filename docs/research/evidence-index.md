@@ -64,6 +64,28 @@ All 24 decoded MP4s report `yuv420p`, `color_range = tv` (Limited), `color_space
 
 ---
 
+## 6. New Field Archives (`C:\Users\zkrei\Downloads\نتايج\جديد`, APK `local-1795672928556`)
+
+| Archive | Size (Bytes) | SHA-256 | ZIP Status & Entries | Contained Active Runs |
+|---|---:|---|---|---|
+| `OpenCineCam-research.zip` | `1,911,843,118` | `CCD58E4FCAC8EEBF398A99C4353EB2B3D4FE096A2CBE09CC12954DB5F2A7C39F` | Valid (`2,971` entries / `2,970` manifest) | `13` run dirs (`11` old/0-attempt + **Run A** `a26cd8da` + **Run B** `922a793c`) |
+| `OpenCineCam-research (1).zip` | `2,264,357,006` | `728B4C7D68E0B0FA8A40F3E245B8E8EE583AE84A18271208CFAA2988873F4F0F` | **100% strict superset** (`3,146` entries / `3,145` manifest; `2,965` identical, `5` updated on resume, `0` missing) | Same + completed **Run B** (`922a793c` after resume from pauses) |
+| `OpenCineCam-research (2).zip` | `990,622,525` | `68DEC1E61611C428B9FD5AFD5F45697AF033590182B0064D0B0C928AFC1E9289` | **Malformed / truncated stream** (ZIP header `50 4B 03 04`, no EOCD; `ZipFile.OpenRead` fails) | Unreadable incomplete export |
+
+### Active Runs Extracted Without Double Counting
+
+- **Run A (`1795675379470-a26cd8da-2059-40a4-85af-305f064ce7ff`):** `19` attempts (`5` `OBSERVED`, `455.4 MB`, `19` MP4s), stopped at **Attempt `019`** (`Stage D · DIRECT_HEVC_SURFACETEXTURE_360P · sustained · retry #1`) at `+299.9 s` (`TIME_SLICE_LIMIT_MS`), `batt=31.0 °C`, `thermalStatus=0`, `evMB=1410.5`, `freeGB=120.69`.
+- **Run B (`1795675910967-922a793c-bd14-4f5f-b2a3-d932ba87eba9`):** `26` attempt dirs (`24` completed: `10` `OBSERVED`, `853.0 MB`, `23` MP4s), paused at **Attempt `018`** (`+299.9 s`, `Time limit reached`, usable `26.65 s` / `86,212,271 B` / `1,560` pkts / `58.533 fps` MP4) and manually paused at **Attempt `019`** (`+557.4 s`, usable `2.415 s` / `11,160,456 B` MP4), then resumed to `Experiment budget reached (24/24 attempts)` (`batt=30 °C`, `thermalStatus=0`). Note also three `0`-attempt battery-limit stops (`38e84a29`, `2eadb3c3`, `5e997001`) + one `0`-attempt (`aa4037c4`) on `local-1795672928556`.
+- **Breakthroughs in Run A & Run B:**
+  - **Live `4K30 OCLog2 HEVC Main 10` (`R-B 003`, `004`):** `39.29–39.46 Mbps`, `123` / `122` pkts, `29.990 fps`, `p50=33.344 ms`, `maxG=33.345 ms`, **`0` drops**, `hevc/Main 10/yuv420p10le`, `ffprobe` + `ffmpeg signalstats` confirmed valid 10-bit pixels (`YMIN=38..YMAX=890` on `003`, shifted high `YAVG=806.8` on `004` `FLAT`).
+  - **Synthetic `001` (`Main10 L6.2 + egl8` vs `egl10`):** `Main10 L6.2 (16777216) + egl8` PASSED at both 4K30 (`main10_prof_level_bt709_lim_4k30_egl8`, `main10_prof_level_oclog2_full_4k30_egl8`) and 4K60 (`main10_4k60_best`): `30/30` samples, `yuv420p10le`, `layout=PASS`, `bits=8` (8-bit source quantized in 10-bit ramp). Both `Main8` & `Main10` `egl10` (`RGBA1010102`) arms passed `configure()+start()+swp=30+outFmt=True` and emitted **`0` encoded samples**.
+  - **`4K60` GPU Bottleneck (`R-B 006/008/012`):** Camera2 delivered `59.94 fps` (`263` / `261` frames, `0` drops), while GL/Muxer dropped `47–49` frames (`48.09–48.45 fps`, `192–196` pkts). `OpenCineLogFrameDiagnostics` localized GL stall `maxTotal=32.289 ms > 16.69 ms` (`encDraw=14.612 ms`, `encSwap=18.651 ms`, `prevDraw+prevSwap=5.3 ms`).
+  - **`DIRECT_HEVC_SURFACETEXTURE_360P`:** Passed 4 s (`R-A 017` `59.902 fps` `0` drops; `R-B 016` `59.896 fps` `0` drops) alongside `1`-drop `R-A 016`; failed 30 s sustained (`R-B 017`: `57` drops; `R-B 020`: `39` drops), whereas single-target `DIRECT_HEVC` 30 s (`R-B 021`: `1,785` pkts, `59.922 fps`, `49.21 Mbps`) had **`0` drops**.
+  - **Kirin ISP Highlight Recovery (`R-B 022/023`):** Locked exposure (`16.666 ms`, `ISO 580–581`): `GAMMA_1_0` clipped `75.2%` (`mean=235.9`, `p50=255`), `SAFE_LINEAR_ROLLOFF` clipped `74.8%` (`mean=236.4`), whereas **`TONEMAP_MODE_GAMMA_VALUE = 2.2`** gave `max=172`, `p99=143`, `mean=92.7`, **`0%` clip & `0%` crush**.
+  - **Unblinded `SOURCE_FORMAT_PROBE` (`R-B 024`):** Cleanly probed cameras `0, 2, 4, 5`: no `RAW_SENSOR`/`RAW10`/`YCBCR_P010` admitted; `PRIVATE` (`4096x3072` / `3984x2240` / `4000x3000`) admitted (`dataSpace=null`); **`com.huawei.capture.metadata.cuvaStateVideoMode`** confirmed as request & session key.
+
+---
+
 ## 4. Failed, Header-Only & Zero-Byte Artifacts (42 MP4 files across Runs 1–3)
 
 | Attempts | File Pattern | Bytes | Container / Failure Signature | Root Cause Summary |

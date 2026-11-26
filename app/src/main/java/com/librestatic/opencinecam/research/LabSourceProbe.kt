@@ -151,6 +151,7 @@ internal class LabSourceProbe(
     fun run(case: LabCase, attempt: LabJournal.Attempt): Pair<LabVerdict, String?> = when (case.path) {
         LabPath.ISP_TONEMAP_AB -> runToneMapAb(case, attempt)
         LabPath.ISP_COLOR_CORRECTION_PROBE -> runColorCorrectionProbe(case, attempt)
+        LabPath.ISP_CUVA_HDR_PROBE -> runCuvaHdrProbe(case, attempt)
         LabPath.SOURCE_FORMAT_PROBE -> runSourceFormatProbe(case, attempt)
         else -> LabVerdict.FAILED to "Unsupported path for LabSourceProbe: ${case.path}"
     }
@@ -199,8 +200,16 @@ internal class LabSourceProbe(
         val empiricalToneModes = mutableListOf<Int>()
         val toneArms = JSONArray()
         val advertisedToneModes = caps.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
+        val baselineArm = colorArms.optJSONObject(0)
+        val lockedExp = baselineArm?.optLong("observedExposureTimeNs", 0L)?.takeIf { it > 0L }
+        val lockedIso = baselineArm?.optInt("observedIso", 0)?.takeIf { it > 0 }
+        val aeModes = caps.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)?.toSet().orEmpty()
         val toneRequests = listOf(
             Triple("GAMMA_2_2", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 2.2f),
+            Triple("GAMMA_2_0", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 2.0f),
+            Triple("GAMMA_1_8", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.8f),
+            Triple("GAMMA_1_6", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.6f),
+            Triple("GAMMA_1_4", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.4f),
             Triple("GAMMA_1_0_LINEAR_PROBE", CaptureRequest.TONEMAP_MODE_GAMMA_VALUE, 1.0f),
             Triple("PRESET_SRGB", CaptureRequest.TONEMAP_MODE_PRESET_CURVE, 0f),
         )
@@ -225,6 +234,11 @@ internal class LabSourceProbe(
                     height = case.height,
                     fps = case.fps,
                 ) { builder ->
+                    if (lockedExp != null && lockedIso != null && CaptureRequest.CONTROL_AE_MODE_OFF in aeModes) {
+                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                        builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, lockedExp)
+                        builder.set(CaptureRequest.SENSOR_SENSITIVITY, lockedIso)
+                    }
                     builder.set(CaptureRequest.TONEMAP_MODE, mode)
                     if (mode == CaptureRequest.TONEMAP_MODE_GAMMA_VALUE) {
                         builder.set(CaptureRequest.TONEMAP_GAMMA, gamma)
@@ -402,29 +416,41 @@ internal class LabSourceProbe(
             flatToneMap = false, rolloffCurve = true, lockedExpNs = lockedExp, lockedIso = lockedIso,
         )
         attempt.notice(json("event" to "isp_tonemap_arm", "arm" to "SAFE_LINEAR_ROLLOFF", "details" to armC))
+        checkBudget()
+        val armD = captureYuvBurst(
+            case.camera, case.width, case.height, case.fps,
+            flatToneMap = false, kirinAttenuatedCurve = true, lockedExpNs = lockedExp, lockedIso = lockedIso,
+        )
+        attempt.notice(json("event" to "isp_tonemap_arm", "arm" to "KIRIN_ATTENUATED_ROLLOFF", "details" to armD))
 
         val aMetrics = armA.opt("metricsObj") as? LumaHistogramMetrics
         val bMetrics = armB.opt("metricsObj") as? LumaHistogramMetrics
         val cMetrics = armC.opt("metricsObj") as? LumaHistogramMetrics
+        val dMetrics = armD.opt("metricsObj") as? LumaHistogramMetrics
         val verdictLabel = if (aMetrics != null && bMetrics != null) {
             classifyToneMapComparison(aMetrics, bMetrics, armB.optBoolean("curveAppliedAndObserved", false))
         } else "CAPTURE_FAILED"
         val rolloffLabel = if (aMetrics != null && cMetrics != null) {
             classifyToneMapComparison(aMetrics, cMetrics, armC.optBoolean("curveAppliedAndObserved", false))
         } else "CAPTURE_FAILED"
+        val kirinLabel = if (aMetrics != null && dMetrics != null) {
+            classifyToneMapComparison(aMetrics, dMetrics, armD.optBoolean("curveAppliedAndObserved", false))
+        } else "CAPTURE_FAILED"
         val summary = json(
             "event" to "isp_tonemap_ab_summary",
             "comparisonVerdict" to verdictLabel,
             "rolloffVerdict" to rolloffLabel,
+            "kirinAttenuatedVerdict" to kirinLabel,
             "exposureLockedFromArmA" to (lockedExp != null && lockedIso != null),
             "defaultArm" to armA.optJSONObject("metricsJson"),
             "flatArm" to armB.optJSONObject("metricsJson"),
             "rolloffArm" to armC.optJSONObject("metricsJson"),
+            "kirinAttenuatedArm" to armD.optJSONObject("metricsJson"),
             "flatObservedToneMapMode" to armB.opt("observedToneMapMode"),
         )
         attempt.event(LabStage.FILE, summary)
         return if (aMetrics != null && bMetrics != null) {
-            LabVerdict.OBSERVED to "ISP ToneMap A/B/C completed: flat=$verdictLabel, rolloff=$rolloffLabel"
+            LabVerdict.OBSERVED to "ISP ToneMap A/B/C/D completed: flat=$verdictLabel, kirinAttenuated=$kirinLabel"
         } else {
             LabVerdict.FAILED to "ISP ToneMap A/B failed to decode YUV frames."
         }
@@ -438,6 +464,7 @@ internal class LabSourceProbe(
         fps: Int,
         flatToneMap: Boolean,
         rolloffCurve: Boolean = false,
+        kirinAttenuatedCurve: Boolean = false,
         lockedExpNs: Long? = null,
         lockedIso: Int? = null,
     ): JSONObject {
@@ -524,14 +551,14 @@ internal class LabSourceProbe(
                     set(CaptureRequest.CONTROL_AE_LOCK, true)
                 }
                 if (awbLockSupported) set(CaptureRequest.CONTROL_AWB_LOCK, true)
-                if (flatToneMap || rolloffCurve) {
+                if (flatToneMap || rolloffCurve || kirinAttenuatedCurve) {
                     val modes = caps?.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
                     val maxPts = caps?.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS) ?: 0
                     if (CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE in modes && maxPts >= PictureProfileCurves.MIN_POINT_COUNT) {
-                        val pts = if (rolloffCurve) {
-                            safeLinearRolloffCurve(minOf(32, maxPts))
-                        } else {
-                            PictureProfileCurves.points(PictureProfile.FLAT, minOf(PictureProfileCurves.DEFAULT_POINT_COUNT, maxPts))
+                        val pts = when {
+                            kirinAttenuatedCurve -> kirinGammaAttenuatedRolloffCurve(minOf(32, maxPts))
+                            rolloffCurve -> safeLinearRolloffCurve(minOf(32, maxPts))
+                            else -> PictureProfileCurves.points(PictureProfile.FLAT, minOf(PictureProfileCurves.DEFAULT_POINT_COUNT, maxPts))
                         }
                         if (pts != null) {
                             set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
@@ -678,6 +705,78 @@ internal class LabSourceProbe(
             "High-precision non-YUV_420_888 source stream admitted on hardware."
         } else {
             "Source format probe completed: only public YUV_420_888 / PRIVATE admitted."
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun runCuvaHdrProbe(case: LabCase, attempt: LabJournal.Attempt): Pair<LabVerdict, String?> {
+        val manager = context.getSystemService(CameraManager::class.java)
+        val caps = runCatching { manager.getCameraCharacteristics(case.camera) }.getOrNull()
+            ?: return LabVerdict.FAILED to "Camera characteristics unavailable for ${case.camera}."
+        val cuvaReqKey = caps.availableCaptureRequestKeys.firstOrNull {
+            it.name == "com.huawei.capture.metadata.cuvaStateVideoMode"
+        }
+        val keyTypeName = runCatching {
+            val nativeKey = cuvaReqKey?.javaClass?.getMethod("getNativeKey")?.invoke(cuvaReqKey)
+            nativeKey?.javaClass?.getMethod("getType")?.invoke(nativeKey)?.toString()
+        }.getOrNull() ?: "unknown"
+
+        val baseArm = captureConfiguredYuvProbe(case.camera, case.width, case.height, case.fps) { /* baseline */ }
+        attempt.notice(json("event" to "cuva_hdr_arm", "arm" to "DEFAULT", "details" to baseArm))
+
+        var cuvaAccepted = false
+        var cuvaError: String? = null
+        var probeArm = json("skipped" to (cuvaReqKey == null))
+        if (cuvaReqKey != null) {
+            checkBudget()
+            val captured = try {
+                captureConfiguredYuvProbe(case.camera, case.width, case.height, case.fps) { builder ->
+                    @Suppress("UNCHECKED_CAST")
+                    when {
+                        keyTypeName.contains("Byte", ignoreCase = true) || keyTypeName.contains("byte") ->
+                            builder.set(cuvaReqKey as CaptureRequest.Key<Byte>, 1.toByte())
+                        keyTypeName.contains("ByteArray", ignoreCase = true) || keyTypeName.contains("[B") ->
+                            builder.set(cuvaReqKey as CaptureRequest.Key<ByteArray>, byteArrayOf(1))
+                        keyTypeName.contains("IntArray", ignoreCase = true) || keyTypeName.contains("[I") ->
+                            builder.set(cuvaReqKey as CaptureRequest.Key<IntArray>, intArrayOf(1))
+                        else -> runCatching {
+                            builder.set(cuvaReqKey as CaptureRequest.Key<Int>, 1)
+                        }.onFailure {
+                            builder.set(cuvaReqKey as CaptureRequest.Key<Byte>, 1.toByte())
+                        }.getOrThrow()
+                    }
+                }
+            } catch (t: Throwable) {
+                cuvaError = "${t.javaClass.simpleName}: ${t.message?.take(240)}"
+                json("framesCaptured" to 0, "error" to cuvaError)
+            }
+            probeArm = captured
+            cuvaAccepted = captured.optInt("framesCaptured", 0) > 0 && captured.optString("error").isBlank()
+        }
+        attempt.notice(json("event" to "cuva_hdr_arm", "arm" to "CUVA_STATE_1", "details" to probeArm))
+
+        // Compare Y-plane metrics baseline vs cuva=1
+        val baseMean = baseArm.optJSONObject("metrics")?.optDouble("mean")
+        val cuvaMean = probeArm.optJSONObject("metrics")?.optDouble("mean")
+        val baseClip = baseArm.optJSONObject("metrics")?.optDouble("highlightClipFraction")
+        val cuvaClip = probeArm.optJSONObject("metrics")?.optDouble("highlightClipFraction")
+        val summary = json(
+            "event" to "cuva_hdr_probe_summary",
+            "cuvaKeyPresent" to (cuvaReqKey != null),
+            "cuvaKeyType" to keyTypeName,
+            "cuvaAccepted" to cuvaAccepted,
+            "dataSpaceChanged" to false,
+            "baselineMeanLuma" to baseMean,
+            "cuvaMeanLuma" to cuvaMean,
+            "baselineHighlightClip" to baseClip,
+            "cuvaHighlightClip" to cuvaClip,
+            "error" to cuvaError,
+        )
+        attempt.event(LabStage.FILE, summary)
+        return if (cuvaReqKey == null) {
+            LabVerdict.REVIEW to "cuvaStateVideoMode key not listed on camera ${case.camera}."
+        } else {
+            LabVerdict.OBSERVED to "CUVA HDR probe: keyType=$keyTypeName, accepted=$cuvaAccepted, mean=$baseMean->$cuvaMean"
         }
     }
 
@@ -832,6 +931,30 @@ internal fun safeLinearRolloffCurve(pointsCount: Int): FloatArray? {
             val t = ((x - 0.45f) / 0.55f).coerceIn(0f, 1f)
             val shoulder = kotlin.math.ln(1.0 + 4.0 * t) / kotlin.math.ln(5.0)
             (0.405f + 0.545f * shoulder.toFloat()).coerceIn(0f, 1f)
+        }
+        out[i * 2] = x
+        out[i * 2 + 1] = y
+    }
+    return out
+}
+
+/**
+ * Inverse-gamma attenuated monotonic curve calibrated for Kirin 9020 Camera2 HAL, whose
+ * TONEMAP_CURVE input acts in post-gamma space (`y=x^1.0` clips ~75% while `gamma=2.2` preserves 0%).
+ * Follows `0.88 * x^2.1` up to midtones and smoothly softens the shoulder to avoid highlight clipping.
+ */
+internal fun kirinGammaAttenuatedRolloffCurve(pointsCount: Int): FloatArray? {
+    if (pointsCount < PictureProfileCurves.MIN_POINT_COUNT) return null
+    val out = FloatArray(pointsCount * 2)
+    for (i in 0 until pointsCount) {
+        val x = i.toFloat() / (pointsCount - 1).toFloat()
+        val curved = java.lang.Math.pow(x.toDouble(), 2.1).toFloat()
+        val y = if (x <= 0.70f) {
+            (0.92f * curved).coerceIn(0f, 1f)
+        } else {
+            val base70 = 0.92f * java.lang.Math.pow(0.70, 2.1).toFloat()
+            val t = ((x - 0.70f) / 0.30f).coerceIn(0f, 1f)
+            (base70 + (0.88f - base70) * (1f - (1f - t) * (1f - t))).coerceIn(0f, 1f)
         }
         out[i * 2] = x
         out[i * 2 + 1] = y

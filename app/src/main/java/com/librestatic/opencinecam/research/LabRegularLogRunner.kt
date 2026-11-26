@@ -63,14 +63,27 @@ internal class LabRegularLogRunner(
         overrideRecipe: ResearchEncoderOverride? = null,
     ): Pair<LabVerdict, String?> {
         val passthroughSdr = case.path == LabPath.GPU_HEVC_4K30 || case.path == LabPath.GPU_HEVC_4K60
-        val requestedBitrate = if (case.fps >= 60) 60_000_000 else 40_000_000
+        val requestedBitrate = when {
+            case.fps >= 60 && case.variant == "bitrate_45m" -> 45_000_000
+            case.fps >= 60 -> 60_000_000
+            else -> 40_000_000
+        }
         val baseOverride = overrideRecipe ?: defaultOverrideFor(case)
+        val is4k60Opt = case.fps >= 60 && case.variant in setOf("realtime", "single_ctx", "prev_30fps", "no_preview", "bitrate_45m", "scopes_pbo")
         val effectiveOverride = baseOverride.copy(
             explicitTargetBitrateBps = requestedBitrate,
             forceEgl8BitForMain10 = baseOverride.forceEgl8BitForMain10 || case.variant == "egl8",
             disableVuiRewrite = baseOverride.disableVuiRewrite || case.variant == "novui",
             useAsyncPboScopes = baseOverride.useAsyncPboScopes || case.variant == "scopes_pbo",
             enableFrameDiagnostics = true,
+            enableRealtimeCodecKeys = baseOverride.enableRealtimeCodecKeys || is4k60Opt,
+            singleContextWhen8Bit = baseOverride.singleContextWhen8Bit ||
+                (case.fps >= 60 && case.variant in setOf("single_ctx", "prev_30fps", "no_preview", "bitrate_45m", "scopes_pbo")),
+            previewFpsDivisor = when {
+                case.variant == "no_preview" -> 0
+                case.variant in setOf("prev_30fps", "bitrate_45m") || (case.fps >= 60 && case.variant == "scopes_pbo") -> 2
+                else -> baseOverride.previewFpsDivisor
+            },
         )
         val provenance = if (passthroughSdr) "POST_ISP_SDR_GPU" else "POST_ISP_SDR_LOG"
 
@@ -136,6 +149,9 @@ internal class LabRegularLogRunner(
                 "disableVuiRewrite" to effectiveOverride.disableVuiRewrite,
                 "useAsyncPboScopes" to effectiveOverride.useAsyncPboScopes,
                 "enableFrameDiagnostics" to effectiveOverride.enableFrameDiagnostics,
+                "enableRealtimeCodecKeys" to effectiveOverride.enableRealtimeCodecKeys,
+                "singleContextWhen8Bit" to effectiveOverride.singleContextWhen8Bit,
+                "previewFpsDivisor" to effectiveOverride.previewFpsDivisor,
                 "allowAvcFallback" to effectiveOverride.allowAvcFallback,
                 "sourceProvenance" to provenance,
             ))
@@ -198,6 +214,15 @@ internal class LabRegularLogRunner(
                             toneMapCurveApplied = true
                         }
                     }
+                    if (caps.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.contains(CaptureRequest.EDGE_MODE_OFF) == true) {
+                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
+                    }
+                    if (caps.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)?.contains(CaptureRequest.NOISE_REDUCTION_MODE_OFF) == true) {
+                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
+                    }
+                } else if (case.variant == "gamma_1_8") {
+                    set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_GAMMA_VALUE)
+                    set(CaptureRequest.TONEMAP_GAMMA, 1.8f)
                     if (caps.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)?.contains(CaptureRequest.EDGE_MODE_OFF) == true) {
                         set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
                     }

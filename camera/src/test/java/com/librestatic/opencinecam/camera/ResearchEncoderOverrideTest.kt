@@ -65,5 +65,10 @@ class ResearchEncoderOverrideTest {
         )
         assertEquals(60_000_000, unscaled60.sentToCodecBps)
         assertFalse(unscaled60.clampedByCodecMax)
+
+        val defaults = ResearchEncoderOverride()
+        assertFalse(defaults.enableRealtimeCodecKeys)
+        assertFalse(defaults.singleContextWhen8Bit)
+        assertEquals(1, defaults.previewFpsDivisor)
     }
 }

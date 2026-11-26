@@ -20,6 +20,7 @@ internal class LabJournal private constructor(val directory: File, revision: Str
     private val complete = File(directory, "summary.json")
     private val telemetryFile = File(directory, "telemetry.jsonl")
     private val pauseFile = File(directory, "pause.json")
+    private val checkpointFile = File(directory, "checkpoint.json")
     private val telemetryLock = Any()
     val finished: Boolean get() = complete.isFile
     fun compatibleWith(revision: String): Boolean = readJson(header)?.let {
@@ -131,6 +132,12 @@ internal class LabJournal private constructor(val directory: File, revision: Str
         writeJson(pauseFile, stopRecord)
         appendTelemetry(stopRecord)
     }
+
+    fun saveCheckpoint(checkpoint: JSONObject) {
+        writeJson(checkpointFile, checkpoint)
+    }
+
+    fun readCheckpoint(): JSONObject? = readJson(checkpointFile)
 
     fun finish(reason: String) {
         val results = history()

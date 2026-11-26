@@ -111,4 +111,79 @@ class LabRegressionTest {
             assertTrue(pts[i * 2 + 1] >= pts[(i - 1) * 2 + 1])
         }
     }
+
+    @Test
+    fun fileEventWithMimeBeatsHashEventAndBt2020FullBeatsBt709InKnowledgeBase() {
+        val dir = folder.newFolder()
+        val kb = LabKnowledgeBase.loadOrCreate(dir)
+
+        // Synthetic matrix has BT.709 Limited first and BT.2020 Full OCLog2 second: must pick BT.2020 Full!
+        val synth = LabCase("0", LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false)
+        kb.ingestAttempt(
+            "001-synth",
+            synth,
+            LabVerdict.OBSERVED,
+            null,
+            listOf(
+                json(
+                    "event" to "synthetic_encoder_arm",
+                    "armId" to "main10_bt709_egl8",
+                    "fps" to 30,
+                    "profile" to CodecProfileLevel.HEVCProfileMain10,
+                    "level" to CodecProfileLevel.HEVCMainTierLevel62,
+                    "colorStandard" to MediaFormat.COLOR_STANDARD_BT709,
+                    "colorRange" to MediaFormat.COLOR_RANGE_LIMITED,
+                    "egl10Bit" to false,
+                    "encodedOk" to true,
+                    "syntheticLayoutVerdict" to "PASS",
+                    "rampEffectiveBits" to 8,
+                ),
+                json(
+                    "event" to "synthetic_encoder_arm",
+                    "armId" to "main10_oclog2_full_egl8",
+                    "fps" to 30,
+                    "profile" to CodecProfileLevel.HEVCProfileMain10,
+                    "level" to CodecProfileLevel.HEVCMainTierLevel62,
+                    "colorStandard" to MediaFormat.COLOR_STANDARD_BT2020,
+                    "colorRange" to MediaFormat.COLOR_RANGE_FULL,
+                    "egl10Bit" to false,
+                    "encodedOk" to true,
+                    "syntheticLayoutVerdict" to "PASS",
+                    "rampEffectiveBits" to 8,
+                ),
+            ),
+        )
+        val picked = kb.bestOverrideFor(3840, 2160, 30, main10 = true)
+        assertEquals(MediaFormat.COLOR_STANDARD_BT2020, picked?.colorStandard)
+        assertEquals(MediaFormat.COLOR_RANGE_FULL, picked?.colorRange)
+
+        // When decoded_frame_and_clip_hash (no mime) follows FILE metadata event, H-04 still gets mime + observedFileFps
+        val log30 = LabCase("0", LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false)
+        kb.ingestAttempt(
+            "003-log",
+            log30,
+            LabVerdict.OBSERVED,
+            null,
+            listOf(
+                json("stage" to LabStage.FILE.name, "mime" to MediaFormat.MIMETYPE_VIDEO_HEVC, "codedBitDepthFromProfile" to 10, "observedFileFps" to 29.99),
+                json("stage" to LabStage.FILE.name, "event" to "decoded_frame_and_clip_hash", "clipSha256" to "abc"),
+            ),
+        )
+        assertEquals(HypothesisStatus.CONFIRMED, kb.hypothesis("H-04")?.status)
+        assertTrue(kb.hypothesis("H-04")?.summary.orEmpty().contains("29.99"))
+    }
+
+    @Test
+    fun kirinGammaAttenuatedRolloffCurveSuppressesMidtonesAndCapsHighlights() {
+        val pts = requireNotNull(kirinGammaAttenuatedRolloffCurve(32))
+        assertEquals(64, pts.size)
+        assertEquals(0f, pts[0], 1e-5f)
+        assertEquals(1f, pts[62], 1e-5f)
+        assertTrue(pts[33] < 0.35f) // attenuated around mid-input (~0.5) matching Kirin post-gamma space
+        assertTrue(pts[63] <= 0.90f) // smooth highlight shoulder ceiling
+        for (i in 1 until 32) {
+            assertTrue(pts[i * 2] > pts[(i - 1) * 2])
+            assertTrue(pts[i * 2 + 1] >= pts[(i - 1) * 2 + 1])
+        }
+    }
 }

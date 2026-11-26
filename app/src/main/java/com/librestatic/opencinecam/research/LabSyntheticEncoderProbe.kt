@@ -46,16 +46,22 @@ internal data class LabSyntheticArm(
     val applyOcLog2Shader: Boolean = false,
     val rewriteVuiUnspecified: Boolean = false,
     val frameCount: Int = 30,
+    val eglFloat16: Boolean = false,
+    val applySubLsbDither: Boolean = false,
 )
 
 /**
  * Deterministic camera-closed EGL frame producer and HEVC Main/Main10 isolation matrix.
- * Tests explicit level admission, color/range keys, EGL 8-bit vs 10-bit surface import,
+ * Tests explicit level admission, color/range keys, EGL 8-bit vs 10-bit vs float16 surface import,
  * 4-quadrant coded geometry, frame-to-frame pixel uniqueness, and 10-bit ramp precision.
  */
 internal object LabSyntheticEncoderProbe {
     private const val EGL_GL_COLORSPACE_KHR = 0x309D
     private const val EGL_GL_COLORSPACE_BT2020_LINEAR_EXT = 0x333F
+    private const val EGL_GL_COLORSPACE_BT2020_HLG_EXT = 0x3540
+    private const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
+    private const val EGL_COLOR_COMPONENT_TYPE_EXT = 0x3339
+    private const val EGL_COLOR_COMPONENT_TYPE_FLOAT_EXT = 0x333A
 
     fun run(attempt: LabJournal.Attempt, checkBudget: () -> Unit): Pair<LabVerdict, String?> {
         val hevcEncoder = findBestHardwareHevcEncoder()
@@ -88,6 +94,10 @@ internal object LabSyntheticEncoderProbe {
             LabSyntheticArm("main10_prof_level_hlg_lim_4k30_egl10", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_HLG, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
             LabSyntheticArm("main10_prof_level_bt709_lim_4k30_egl8", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT709, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_SDR_VIDEO, egl10Bit = false, frameCount = 30),
             LabSyntheticArm("main10_prof_level_oclog2_full_4k30_egl8", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = false, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
+            LabSyntheticArm("main10_l62_egl10_hlg_cs", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_HLG, egl10Bit = true, eglColorSpace = EGL_GL_COLORSPACE_BT2020_HLG_EXT, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
+            LabSyntheticArm("main10_l62_egl10_pq_cs", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_LIMITED, MediaFormat.COLOR_TRANSFER_ST2084, egl10Bit = true, eglColorSpace = EGL_GL_COLORSPACE_BT2020_PQ_EXT, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30),
+            LabSyntheticArm("main10_l62_egl16f_oclog2", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = true, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 15, eglFloat16 = true),
+            LabSyntheticArm("main10_l62_oclog2_egl8_dither", 3840, 2160, 30, CodecProfileLevel.HEVCProfileMain10, main10Level4k30, 40_000_000, MediaFormat.COLOR_STANDARD_BT2020, MediaFormat.COLOR_RANGE_FULL, null, egl10Bit = false, eglColorSpace = null, applyOcLog2Shader = true, rewriteVuiUnspecified = true, frameCount = 30, applySubLsbDither = true),
         )
 
         val armResults = mutableListOf<JSONObject>()
@@ -181,6 +191,10 @@ internal object LabSyntheticEncoderProbe {
             }
         } finally {
             scratchFiles.forEach { (_, f) -> runCatching { f.delete() } }
+        }
+        runCatching {
+            val bbProbe = probeVendor10BitByteBufferAdmission(hevcEncoder.first, main10Level4k30)
+            attempt.notice(bbProbe)
         }
 
         val passingMain10 = armResults.filter {
@@ -293,8 +307,12 @@ internal object LabSyntheticEncoderProbe {
             step = "egl_init"
             eglDisplay = GpuEglDisplayLease.acquire()
             displayAcquired = true
-            val eglConfig = if (arm.egl10Bit) chooseConfig(eglDisplay, 10, 10, 10, 2) else chooseConfig(eglDisplay, 8, 8, 8, 8)
-            check(eglConfig != null) { "EGLConfig (${if (arm.egl10Bit) "10-bit" else "8-bit"}) unavailable" }
+            val eglConfig = when {
+                arm.eglFloat16 -> chooseFloat16Config(eglDisplay)
+                arm.egl10Bit -> chooseConfig(eglDisplay, 10, 10, 10, 2)
+                else -> chooseConfig(eglDisplay, 8, 8, 8, 8)
+            }
+            check(eglConfig != null) { "EGLConfig (${when { arm.eglFloat16 -> "FP16"; arm.egl10Bit -> "10-bit"; else -> "8-bit" }}) unavailable" }
             eglContext = EGL14.eglCreateContext(
                 eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT,
                 intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0,
@@ -378,9 +396,11 @@ internal object LabSyntheticEncoderProbe {
             val frameStepNs = 1_000_000_000L / arm.fps
             val uFrameLoc = GLES30.glGetUniformLocation(program, "uFrameIndex")
             val uLogLoc = GLES30.glGetUniformLocation(program, "uApplyOcLog2")
+            val uDitherLoc = GLES30.glGetUniformLocation(program, "uApplyDither")
             GLES30.glViewport(0, 0, arm.width, arm.height)
             GLES30.glUseProgram(program)
             GLES30.glUniform1i(uLogLoc, if (arm.applyOcLog2Shader) 1 else 0)
+            if (uDitherLoc >= 0) GLES30.glUniform1i(uDitherLoc, if (arm.applySubLsbDither) 1 else 0)
             GLES30.glEnableVertexAttribArray(0)
             GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 0, quadBuf)
             for (i in 0 until arm.frameCount) {
@@ -490,6 +510,62 @@ internal object LabSyntheticEncoderProbe {
         return if (ok && count[0] > 0) configs[0] else null
     }
 
+    private fun chooseFloat16Config(display: EGLDisplay): EGLConfig? {
+        val configs = arrayOfNulls<EGLConfig>(8)
+        val count = IntArray(1)
+        val ok = EGL14.eglChooseConfig(
+            display,
+            intArrayOf(
+                EGL_COLOR_COMPONENT_TYPE_EXT, EGL_COLOR_COMPONENT_TYPE_FLOAT_EXT,
+                EGL14.EGL_RED_SIZE, 16, EGL14.EGL_GREEN_SIZE, 16, EGL14.EGL_BLUE_SIZE, 16, EGL14.EGL_ALPHA_SIZE, 16,
+                EGL14.EGL_RENDERABLE_TYPE, EGLExt.EGL_OPENGL_ES3_BIT_KHR,
+                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
+                EGL14.EGL_NONE,
+            ),
+            0, configs, 0, configs.size, count, 0,
+        )
+        return if (ok && count[0] > 0) configs[0] else null
+    }
+
+    private fun probeVendor10BitByteBufferAdmission(codecName: String, main10Level: Int): JSONObject {
+        val candidateFormats = listOf(
+            "COLOR_FormatYUV420Flexible" to MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible,
+            "HISI_VENDOR_0x7F00000F" to 0x7F00000F,
+            "HISI_VENDOR_0x7F000011" to 0x7F000011,
+        )
+        val results = JSONArray()
+        for ((label, colorFmt) in candidateFormats) {
+            var codec: MediaCodec? = null
+            var started = false
+            val entry = json("formatLabel" to label, "colorFormat" to colorFmt, "level" to main10Level)
+            try {
+                val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, 1920, 1080).apply {
+                    setInteger(MediaFormat.KEY_PROFILE, CodecProfileLevel.HEVCProfileMain10)
+                    setInteger(MediaFormat.KEY_LEVEL, main10Level)
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFmt)
+                    setInteger(MediaFormat.KEY_BIT_RATE, 20_000_000)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                }
+                val enc = MediaCodec.createByCodecName(codecName)
+                codec = enc
+                enc.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                enc.start()
+                started = true
+                entry.put("admitted", true)
+                entry.put("inputFormat", runCatching { enc.inputFormat.toString() }.getOrNull())
+            } catch (t: Throwable) {
+                entry.put("admitted", false)
+                entry.put("error", "${t.javaClass.simpleName}: ${t.message?.take(200)}")
+            } finally {
+                if (started) runCatching { codec?.stop() }
+                runCatching { codec?.release() }
+            }
+            results.put(entry)
+        }
+        return json("event" to "vendor_bytebuffer_10bit_probe", "codec" to codecName, "formats" to results)
+    }
+
     private fun createQuadBuffer(): FloatBuffer =
         ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
             put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f))
@@ -537,6 +613,7 @@ internal object LabSyntheticEncoderProbe {
         precision highp float;
         uniform float uFrameIndex;
         uniform int uApplyOcLog2;
+        uniform int uApplyDither;
         in vec2 vUv;
         out vec4 outColor;
         // Matches com.librestatic.opencinecam.camera.OpenCineLog2Curve (BLACK_CODE=0.10, WHITE_CODE=0.90, BASE=50.0).
@@ -579,7 +656,12 @@ internal object LabSyntheticEncoderProbe {
             if (abs((1.0 - vUv.y) - vUv.x) < 0.012) {
                 rgb = vec3(0.92, 0.25, 0.85);
             }
-            outColor = vec4(uApplyOcLog2 == 1 ? encodeOcLog2(rgb) : rgb, 1.0);
+            vec3 encoded = uApplyOcLog2 == 1 ? encodeOcLog2(rgb) : rgb;
+            if (uApplyDither == 1) {
+                float noise = fract(sin(dot(gl_FragCoord.xy + vec2(uFrameIndex * 0.37, 0.0), vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+                encoded = clamp(encoded + vec3(noise / 255.0), 0.0, 1.0);
+            }
+            outColor = vec4(encoded, 1.0);
         }
     """.trimIndent()
 }

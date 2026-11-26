@@ -29,7 +29,7 @@ fun ResearchLab() {
             progress = LabUiProgress(
                 stageLabel = "Stage B · 4K30 LOG & GPU HEVC",
                 attemptNumber = 2,
-                maxAttempts = 24,
+                maxAttempts = 54,
                 hypothesis = "H-04: live 4K30 regular-session OCLog2 Main10 using synthetic recipe.",
                 confirmedHypotheses = 2,
                 totalHypotheses = 10,

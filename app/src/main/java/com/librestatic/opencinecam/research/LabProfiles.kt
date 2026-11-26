@@ -56,18 +56,27 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
             if (uhdInTexture && has30) {
                 add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, flatToneMap = true))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K30, 3840, 2160, 30, listed = false, variant = "gamma_1_8"))
                 add(LabCase(id, LabPath.GPU_HEVC_4K30, 3840, 2160, 30, listed = false))
                 add(LabCase(id, LabPath.ISP_TONEMAP_AB, 3840, 2160, 30, listed = false))
                 add(LabCase(id, LabPath.ISP_COLOR_CORRECTION_PROBE, 3840, 2160, 30, listed = false))
+                add(LabCase(id, LabPath.ISP_CUVA_HDR_PROBE, 3840, 2160, 30, listed = false))
             } else if (has30 && Size(1920, 1080) in textureSizes) {
                 add(LabCase(id, LabPath.ISP_COLOR_CORRECTION_PROBE, 1920, 1080, 30, listed = false))
+                add(LabCase(id, LabPath.ISP_CUVA_HDR_PROBE, 1920, 1080, 30, listed = false))
             }
             if (uhdInTexture && (fixed60 || descriptor.targetFpsRanges.any { 60 in it.lower..it.upper })) {
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "realtime"))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "single_ctx"))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "prev_30fps"))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "no_preview"))
+                add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "bitrate_45m"))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "egl8"))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "novui"))
                 add(LabCase(id, LabPath.LOG_REGULAR_4K60, 3840, 2160, 60, listed = false, variant = "scopes_pbo"))
                 add(LabCase(id, LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false))
+                add(LabCase(id, LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false, variant = "prev_30fps"))
                 add(LabCase(id, LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false, variant = "novui"))
                 add(LabCase(id, LabPath.GPU_HEVC_4K60, 3840, 2160, 60, listed = false, variant = "scopes_pbo"))
             }

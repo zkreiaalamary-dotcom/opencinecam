@@ -57,7 +57,7 @@ import android.net.Uri
 internal data class LabUiProgress(
     val stageLabel: String = "",
     val attemptNumber: Int = 0,
-    val maxAttempts: Int = 24,
+    val maxAttempts: Int = 54,
     val hypothesis: String? = null,
     val confirmedHypotheses: Int = 0,
     val totalHypotheses: Int = 10,

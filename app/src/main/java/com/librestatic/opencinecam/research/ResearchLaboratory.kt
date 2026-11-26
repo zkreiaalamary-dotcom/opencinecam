@@ -31,7 +31,7 @@ internal class ResearchLaboratory(
 ) {
     private val cancelled = AtomicBoolean()
     private val root = evidenceRoot(context)
-    private val started = SystemClock.elapsedRealtime()
+    private val sessionBudget = LabSessionBudget()
     private val evidenceLimitBytes = LabStorageManager.loadEvidenceLimitBytes(context)
     private val thermalPolicy = LabThermalPolicy(evidenceLimitBytes = evidenceLimitBytes)
     private var activeJournal: LabJournal? = null
@@ -140,22 +140,25 @@ internal class ResearchLaboratory(
         regularLog: LabRegularLogRunner,
         sourceProbe: LabSourceProbe,
     ): String {
-        repeat(MAX_ATTEMPTS_PER_RUN) {
+        val maxLoopSteps = sessionBudget.maxTotal + 8
+        repeat(maxLoopSteps) {
             awaitThermalClearance(journal, knowledge)
             val history = journal.history()
-            val nonStoppedCount = history.count { it.verdict != LabVerdict.STOPPED }
-            if (nonStoppedCount >= MAX_ATTEMPTS_PER_RUN) {
-                val reason = "Experiment budget reached ($nonStoppedCount/$MAX_ATTEMPTS_PER_RUN attempts)."
-                journal.finish(reason)
-                runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
-                return "$reason Evidence is ready to export."
-            }
+            val counts = sessionBudget.snapshot(history)
             val next = planner.next(history.filter { it.verdict != LabVerdict.STOPPED })
             if (next == null) {
                 val reason = "All admissible autonomous experiments completed."
+                journal.saveCheckpoint(json("state" to "FINISHED", "reason" to reason, "coreExecuted" to counts.coreExecuted, "adaptiveExecuted" to counts.adaptiveExecuted, "epochMs" to System.currentTimeMillis()))
                 journal.finish(reason)
                 runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, reason) }
                 return "Research complete. Evidence is ready to export."
+            }
+            val budgetBlockReason = sessionBudget.checkNext(history, next.attempt)
+            if (budgetBlockReason != null) {
+                journal.saveCheckpoint(json("state" to "FINISHED_BUDGET", "reason" to budgetBlockReason, "coreExecuted" to counts.coreExecuted, "adaptiveExecuted" to counts.adaptiveExecuted, "epochMs" to System.currentTimeMillis()))
+                journal.finish(budgetBlockReason)
+                runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), history, knowledge, budgetBlockReason) }
+                return "$budgetBlockReason Evidence is ready to export."
             }
             val estimateBytes = LabStorageManager.estimateAttemptBytes(next.attempt)
             val spaceDecision = LabStorageManager.checkSpace(
@@ -172,12 +175,12 @@ internal class ResearchLaboratory(
             }
             val stageTitle = planner.stageLabel(next.attempt)
             status("$stageTitle · ${next.attempt.label}")
-            val sample = lastSample ?: sampleThermal(context, root).also { lastSample = it }
+            val sample = lastSample ?: sampleThermal(context, root, evidenceLimitBytes).also { lastSample = it }
             onProgress?.invoke(
                 LabUiProgress(
                     stageLabel = stageTitle,
-                    attemptNumber = nonStoppedCount + 1,
-                    maxAttempts = MAX_ATTEMPTS_PER_RUN,
+                    attemptNumber = counts.totalExecuted + 1,
+                    maxAttempts = counts.maxTotal,
                     hypothesis = next.hypothesis,
                     confirmedHypotheses = knowledge.confirmedCount(),
                     totalHypotheses = knowledge.totalHypotheses(),
@@ -188,8 +191,22 @@ internal class ResearchLaboratory(
             val attempt = journal.begin(next, apkRevision)
             attempt.notice(sample.toJson())
             val stopReason = execute(next.attempt, attempt, knowledge, video, regularLog, sourceProbe)
+            val updatedHistory = journal.history()
+            val updatedCounts = sessionBudget.snapshot(updatedHistory)
+            journal.saveCheckpoint(
+                json(
+                    "state" to if (stopReason != null) "PAUSED" else "RUNNING",
+                    "lastAttemptId" to attempt.directory.name,
+                    "lastPath" to next.attempt.path.name,
+                    "lastVariant" to next.attempt.variant,
+                    "coreExecuted" to updatedCounts.coreExecuted,
+                    "adaptiveExecuted" to updatedCounts.adaptiveExecuted,
+                    "stopReason" to stopReason,
+                    "epochMs" to System.currentTimeMillis(),
+                ),
+            )
             runCatching {
-                LabReportGenerator.generate(journal.directory, journal.inventoryJson(), journal.history(), knowledge, stopReason)
+                LabReportGenerator.generate(journal.directory, journal.inventoryJson(), updatedHistory, knowledge, stopReason)
             }.onFailure { err ->
                 journal.appendTelemetry(json("event" to "report_error", "error" to "${err.javaClass.name}: ${err.message}"))
             }
@@ -200,10 +217,10 @@ internal class ResearchLaboratory(
                 Thread.sleep(100)
             }
         }
-        val reason = "Experiment budget reached."
+        val reason = "All planned autonomous loop steps completed."
         journal.finish(reason)
         runCatching { LabReportGenerator.generate(journal.directory, journal.inventoryJson(), journal.history(), knowledge, reason) }
-        return "Experiment budget reached. Evidence is ready to export."
+        return "$reason Evidence is ready to export."
     }
 
     private fun execute(
@@ -225,7 +242,7 @@ internal class ResearchLaboratory(
                 val override = knowledge.bestOverrideFor(case.width, case.height, case.fps, main10 = main10)
                 regularLog.run(case, attempt, override)
             }
-            LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.SOURCE_FORMAT_PROBE ->
+            LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.SOURCE_FORMAT_PROBE, LabPath.ISP_CUVA_HDR_PROBE ->
                 sourceProbe.run(case, attempt)
             else -> video.run(case, attempt)
         }
@@ -294,11 +311,12 @@ internal class ResearchLaboratory(
                 is ThermalDecision.Continue -> return
                 is ThermalDecision.CooldownWait -> {
                     status(decision.reason)
+                    val counts = sessionBudget.snapshot(journal.history())
                     onProgress?.invoke(
                         LabUiProgress(
                             stageLabel = "Thermal Cooldown",
-                            attemptNumber = journal.history().count { it.verdict != LabVerdict.STOPPED },
-                            maxAttempts = MAX_ATTEMPTS_PER_RUN,
+                            attemptNumber = counts.totalExecuted,
+                            maxAttempts = counts.maxTotal,
                             hypothesis = decision.reason,
                             confirmedHypotheses = knowledge.confirmedCount(),
                             totalHypotheses = knowledge.totalHypotheses(),
@@ -352,21 +370,66 @@ internal class ResearchLaboratory(
             activeJournal?.recordStop(reason, lastSample?.toJson())
             throw LabStop(reason)
         }
-        if (SystemClock.elapsedRealtime() - started >= TIME_SLICE_LIMIT_MS) {
-            val reason = "Time limit reached. The saved run can be resumed."
-            activeJournal?.recordStop(reason, lastSample?.toJson())
-            throw LabStop(reason)
-        }
     }
 
     companion object {
-        private const val MAX_ATTEMPTS_PER_RUN = 24
-        private const val TIME_SLICE_LIMIT_MS = 300_000L
         private const val TELEMETRY_INTERVAL_MS = 2_000L
         private const val COOLDOWN_POLL_MS = 2_000L
         private val exclusive = AtomicBoolean()
 
         fun evidenceRoot(context: Context) = File(context.filesDir, "research-lab")
+    }
+}
+
+/**
+ * Separates fixed core discovery experiments from bounded adaptive follow-ups and blocks
+ * non-productive duplicate scheduling without imposing any elapsed-session time cap.
+ */
+internal class LabSessionBudget(
+    val maxCoreAttempts: Int = DEFAULT_MAX_CORE_ATTEMPTS,
+    val maxAdaptiveFollowUps: Int = DEFAULT_MAX_ADAPTIVE_FOLLOWUPS,
+) {
+    val maxTotal: Int get() = maxCoreAttempts + maxAdaptiveFollowUps
+
+    data class Snapshot(
+        val coreExecuted: Int,
+        val adaptiveExecuted: Int,
+        val totalExecuted: Int,
+        val maxTotal: Int,
+    )
+
+    fun isAdaptive(case: LabCase): Boolean = case.retryIndex > 0 || case.variant.isNotBlank()
+
+    fun snapshot(history: List<LabResult>): Snapshot {
+        val executed = history.filter { it.verdict != LabVerdict.STOPPED }
+        val core = executed.count { !isAdaptive(it.attempt) }
+        val adaptive = executed.count { isAdaptive(it.attempt) }
+        return Snapshot(
+            coreExecuted = core,
+            adaptiveExecuted = adaptive,
+            totalExecuted = core + adaptive,
+            maxTotal = maxTotal,
+        )
+    }
+
+    fun checkNext(history: List<LabResult>, nextCase: LabCase): String? {
+        val executed = history.filter { it.verdict != LabVerdict.STOPPED }
+        if (executed.any { it.attempt.key == nextCase.key }) {
+            return "Non-productive repeat guard triggered for ${nextCase.key}."
+        }
+        val counts = snapshot(history)
+        return when {
+            !isAdaptive(nextCase) && counts.coreExecuted >= maxCoreAttempts ->
+                "Core experiment budget reached (${counts.coreExecuted}/$maxCoreAttempts)."
+            isAdaptive(nextCase) && counts.adaptiveExecuted >= maxAdaptiveFollowUps ->
+                "Adaptive follow-up budget reached (${counts.adaptiveExecuted}/$maxAdaptiveFollowUps)."
+            else -> null
+        }
+    }
+
+    companion object {
+        const val DEFAULT_MAX_CORE_ATTEMPTS = 36
+        const val DEFAULT_MAX_ADAPTIVE_FOLLOWUPS = 18
     }
 }
 

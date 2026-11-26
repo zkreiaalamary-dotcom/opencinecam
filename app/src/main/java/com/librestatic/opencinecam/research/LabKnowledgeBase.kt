@@ -145,6 +145,8 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         private set
     var colorCorrectionEmpiricalVerdict: String? = null
         private set
+    var cuvaHdrProbeVerdict: String? = null
+        private set
     var highPrecisionSourceAdmitted: Boolean? = null
         private set
 
@@ -160,9 +162,14 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
     fun bestOverrideFor(width: Int, height: Int, fps: Int, main10: Boolean = true): ResearchEncoderOverride? {
         val targetProfile = if (main10) CodecProfileLevel.HEVCProfileMain10 else CodecProfileLevel.HEVCProfileMain
         val profileMatches = recipes.filter { it.profile == targetProfile && it.geometryClean != false }
-        val exact = profileMatches.filter { it.fps == fps }
-            .maxByOrNull { (it.rampEffectiveBits ?: 0) * 10 + if (!it.forceEgl8BitForMain10) 2 else 0 }
-        val fallback = profileMatches.maxByOrNull { (it.rampEffectiveBits ?: 0) * 10 + if (!it.forceEgl8BitForMain10) 2 else 0 }
+        fun recipeScore(r: LearnedEncoderRecipe): Int {
+            val bits = (r.rampEffectiveBits ?: 0) * 10
+            val egl10Bonus = if (!r.forceEgl8BitForMain10) 2 else 0
+            val logColorBonus = if (main10 && r.colorStandard == MediaFormat.COLOR_STANDARD_BT2020 && r.colorRange == MediaFormat.COLOR_RANGE_FULL) 4 else 0
+            return bits + egl10Bonus + logColorBonus
+        }
+        val exact = profileMatches.filter { it.fps == fps }.maxByOrNull(::recipeScore)
+        val fallback = profileMatches.maxByOrNull(::recipeScore)
         val chosen = exact ?: fallback ?: return null
         val adjusted = chosen.toResearchOverride(allowAvcFallback = false)
         return if (fps >= 60 && width >= 3840) {
@@ -273,6 +280,7 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
                 ingestDirect4k60(attemptId, case, verdict, reason, events)
             LabPath.ISP_TONEMAP_AB -> ingestToneMapAb(attemptId, verdict, events)
             LabPath.ISP_COLOR_CORRECTION_PROBE -> ingestColorCorrectionProbe(attemptId, verdict, events)
+            LabPath.ISP_CUVA_HDR_PROBE -> ingestCuvaHdrProbe(attemptId, verdict, events)
             LabPath.SOURCE_FORMAT_PROBE -> ingestSourceProbe(attemptId, verdict, events)
             LabPath.LOG -> if (case.hfr) ingestHfrLog(attemptId, case, verdict, reason)
             else -> Unit
@@ -361,8 +369,9 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         reason: String?,
         events: List<JSONObject>,
     ) {
-        val fileEvent = events.lastOrNull { it.optString("stage") == LabStage.FILE.name }
-        val mime = fileEvent?.optString("mime")
+        val fileEvent = events.lastOrNull { it.optString("stage") == LabStage.FILE.name && it.has("mime") }
+            ?: events.lastOrNull { it.optString("stage") == LabStage.FILE.name }
+        val mime = fileEvent?.optString("mime").orEmpty()
         val bitDepth = fileEvent?.opt("codedBitDepthFromProfile")?.let { it as? Number }?.toInt()
             ?: fileEvent?.optJSONObject("sps")?.opt("bitDepthLuma")?.let { it as? Number }?.toInt()
         val observedFps = fileEvent?.opt("observedFileFps")?.let { it as? Number }?.toDouble()
@@ -375,9 +384,12 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
             else -> HypothesisStatus.INCONCLUSIVE
         }
         val prevStatus = hypotheses[hypId]?.status
-        val finalStatus = if (prevStatus == HypothesisStatus.CONFIRMED && status == HypothesisStatus.REFUTED) {
-            HypothesisStatus.CONTRADICTED
-        } else status
+        val finalStatus = when {
+            prevStatus == HypothesisStatus.CONFIRMED && status == HypothesisStatus.REFUTED &&
+                (case.fps < 60 && !case.flatToneMap && case.variant.isBlank()) -> HypothesisStatus.CONTRADICTED
+            prevStatus == HypothesisStatus.CONFIRMED -> HypothesisStatus.CONFIRMED
+            else -> status
+        }
 
         updateHypothesis(
             hypId,
@@ -390,7 +402,7 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
             if (bestSourcePrecision == "UNVERIFIED" || bestSourcePrecision.startsWith("SYNTHETIC_")) {
                 bestSourcePrecision = "POST_ISP_8BIT_SDR_DERIVED (regular Session SDR_BT709_ISP)"
             }
-            bestLogRecipeSummary = "${case.path.name} (${case.width}x${case.height} @ ${"%.2f".format(java.util.Locale.ROOT, observedFps ?: case.fps.toDouble())} fps, flat=${case.flatToneMap}, attempt=$attemptId)"
+            bestLogRecipeSummary = "${case.path.name} (${case.width}x${case.height} @ ${"%.2f".format(java.util.Locale.ROOT, observedFps ?: case.fps.toDouble())} fps, flat=${case.flatToneMap}, var=${case.variant.ifBlank { "default" }}, attempt=$attemptId)"
         }
     }
 
@@ -402,7 +414,8 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         events: List<JSONObject>,
     ) {
         if (case.fps >= 60 && verdict == LabVerdict.OBSERVED && hypotheses["H-05"]?.status != HypothesisStatus.CONFIRMED) {
-            val fileEvent = events.lastOrNull { it.optString("stage") == LabStage.FILE.name }
+            val fileEvent = events.lastOrNull { it.optString("stage") == LabStage.FILE.name && it.has("mime") }
+                ?: events.lastOrNull { it.optString("stage") == LabStage.FILE.name }
             updateHypothesis(
                 "H-05",
                 HypothesisStatus.INCONCLUSIVE,
@@ -420,7 +433,8 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         events: List<JSONObject>,
     ) {
         if (case.fps < 60) return
-        val fileEvent = events.lastOrNull { it.optString("stage") == LabStage.FILE.name }
+        val fileEvent = events.lastOrNull { it.optString("stage") == LabStage.FILE.name && it.has("mime") }
+            ?: events.lastOrNull { it.optString("stage") == LabStage.FILE.name }
         val observedFps = fileEvent?.opt("observedFileFps")?.let { it as? Number }?.toDouble()
         val status = when {
             case.longer && verdict == LabVerdict.OBSERVED -> HypothesisStatus.CONFIRMED
@@ -466,6 +480,11 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         }.orEmpty()
         val inference = summary.optString("discoveryInference")
         colorCorrectionEmpiricalVerdict = "ccModes=$ccModes, extraToneModes=$tmModes, inference=$inference"
+    }
+
+    private fun ingestCuvaHdrProbe(attemptId: String, verdict: LabVerdict, events: List<JSONObject>) {
+        val summary = events.lastOrNull { it.optString("event") == "cuva_hdr_probe_summary" } ?: return
+        cuvaHdrProbeVerdict = "${verdict.name}: keyType=${summary.optString("cuvaKeyType")}, accepted=${summary.optBoolean("cuvaAccepted")}, dataSpaceChanged=${summary.optBoolean("dataSpaceChanged")}"
     }
 
     private fun ingestSourceProbe(attemptId: String, verdict: LabVerdict, events: List<JSONObject>) {
@@ -547,6 +566,7 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         "bestDirect4k60Summary" to bestDirect4k60Summary,
         "toneMapFlatVerdict" to toneMapFlatVerdict,
         "colorCorrectionEmpiricalVerdict" to colorCorrectionEmpiricalVerdict,
+        "cuvaHdrProbeVerdict" to cuvaHdrProbeVerdict,
         "highPrecisionSourceAdmitted" to highPrecisionSourceAdmitted,
         "hypotheses" to JSONArray(hypotheses.values.map { it.toJson() }),
         "learnedRecipes" to JSONArray(recipes.map { it.toJson() }),
@@ -593,6 +613,9 @@ internal class LabKnowledgeBase private constructor(private val file: File) {
         obj.optString("toneMapFlatVerdict").takeIf { it.isNotBlank() && it != "null" }?.let { toneMapFlatVerdict = it }
         obj.optString("colorCorrectionEmpiricalVerdict").takeIf { it.isNotBlank() && it != "null" }?.let {
             colorCorrectionEmpiricalVerdict = it
+        }
+        obj.optString("cuvaHdrProbeVerdict").takeIf { it.isNotBlank() && it != "null" }?.let {
+            cuvaHdrProbeVerdict = it
         }
         if (!obj.isNull("highPrecisionSourceAdmitted")) highPrecisionSourceAdmitted = obj.optBoolean("highPrecisionSourceAdmitted")
 

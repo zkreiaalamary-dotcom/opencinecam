@@ -26,21 +26,26 @@ internal class LabAutonomousPlanner(
 
         // Stage B: 4K30 regular-session OCLog2 (default & FLAT tone map) + GPU HEVC control.
         val log4k30 = candidates.firstOrNull {
-            it.path == LabPath.LOG_REGULAR_4K30 && !it.flatToneMap && !it.longer && !it.previewOnly
+            it.path == LabPath.LOG_REGULAR_4K30 && !it.flatToneMap && !it.longer && !it.previewOnly && it.variant.isBlank()
         }
         if (log4k30 != null && log4k30.key !in seen) {
             return LabDecision(log4k30, null, "Stage B (H-04): live 4K30 regular-session OCLog2 Main10 using synthetic recipe.")
         }
-        val log4k30Result = history.lastOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K30 && !it.attempt.flatToneMap && !it.attempt.longer }
+        val log4k30Result = history.lastOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K30 && !it.attempt.flatToneMap && !it.attempt.longer && it.attempt.variant.isBlank() }
         if (log4k30Result?.verdict == LabVerdict.OBSERVED) {
             candidates.firstOrNull {
-                it.path == LabPath.LOG_REGULAR_4K30 && it.flatToneMap && !it.longer && !it.previewOnly && it.key !in seen
+                it.path == LabPath.LOG_REGULAR_4K30 && it.flatToneMap && !it.longer && !it.previewOnly && it.variant.isBlank() && it.key !in seen
             }?.let { flatCase ->
                 return LabDecision(flatCase, log4k30Result.id, "Stage B (H-04/H-07): 4K30 OCLog2 with TONEMAP_MODE_CONTRAST_CURVE FLAT.")
             }
+            candidates.firstOrNull {
+                it.path == LabPath.LOG_REGULAR_4K30 && !it.flatToneMap && !it.longer && !it.previewOnly && it.variant == "gamma_1_8" && it.key !in seen
+            }?.let { gammaCase ->
+                return LabDecision(gammaCase, log4k30Result.id, "Stage B (H-04/H-07): 4K30 OCLog2 with TONEMAP_MODE_GAMMA_VALUE=1.8 highlight headroom.")
+            }
         }
         candidates.firstOrNull {
-            it.path == LabPath.GPU_HEVC_4K30 && !it.longer && !it.previewOnly && it.key !in seen
+            it.path == LabPath.GPU_HEVC_4K30 && !it.longer && !it.previewOnly && it.variant.isBlank() && it.key !in seen
         }?.let { gpu30 ->
             return LabDecision(gpu30, log4k30Result?.id, "Stage B: regular-session 4K30 GPU HEVC Main8 control.")
         }
@@ -62,8 +67,14 @@ internal class LabAutonomousPlanner(
         val log60BaseResult = history.lastOrNull {
             it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && it.attempt.variant.isBlank()
         }
-        if (log60BaseResult != null && log60BaseResult.verdict != LabVerdict.OBSERVED) {
+        val log60AnyObserved = history.firstOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && it.verdict == LabVerdict.OBSERVED }
+        if (log60BaseResult != null && log60BaseResult.verdict != LabVerdict.OBSERVED && log60AnyObserved == null) {
             for ((variantKey, hypDesc) in listOf(
+                "realtime" to "Stage C (H-05): enable KEY_PRIORITY=0 & KEY_OPERATING_RATE=60 on 4K60 OCLog2.",
+                "single_ctx" to "Stage C (H-05): eliminate dual-EGLContext flush via single 8-bit context on 4K60 OCLog2.",
+                "prev_30fps" to "Stage C (H-05): decimate preview draw/swap to 30 fps while encoding 4K60 OCLog2.",
+                "no_preview" to "Stage C (H-05): suspend preview swap during recording to isolate 4K60 encoder headroom.",
+                "bitrate_45m" to "Stage C (H-05): lower target bitrate to 45 Mbps with single-ctx & 30 fps preview.",
                 "egl8" to "Stage C (H-05): isolate 8-bit EGL target vs Main10 codec on 4K60 OCLog2.",
                 "novui" to "Stage C (H-05): isolate H.265 SPS VUI rewriting on 4K60 OCLog2.",
             )) {
@@ -75,11 +86,10 @@ internal class LabAutonomousPlanner(
             }
         }
         val log60Result = history.lastOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer }
-        val log60AnyObserved = history.firstOrNull { it.attempt.path == LabPath.LOG_REGULAR_4K60 && !it.attempt.longer && it.verdict == LabVerdict.OBSERVED }
         if (log60AnyObserved != null) {
             val longLog60 = log60AnyObserved.attempt.copy(longer = true, retryIndex = 0)
             if (longLog60.key !in seen) {
-                return LabDecision(longLog60, log60AnyObserved.id, "Stage C (H-05): extend verified 4K60 OCLog2 to 10 s window.")
+                return LabDecision(longLog60, log60AnyObserved.id, "Stage C (H-05): extend verified 4K60 OCLog2 (${log60AnyObserved.attempt.variant.ifBlank { "default" }}) to 10 s window.")
             }
         }
         if (gpu30Ok || log30Ok || synth60AnyOk) {
@@ -87,6 +97,14 @@ internal class LabAutonomousPlanner(
                 it.path == LabPath.GPU_HEVC_4K60 && !it.longer && !it.previewOnly && it.variant.isBlank() && it.key !in seen
             }?.let { gpu60 ->
                 return LabDecision(gpu60, log60Result?.id, "Stage C: test 4K60 GPU HEVC Main8 on regular session.")
+            }
+            val gpu60Base = history.lastOrNull { it.attempt.path == LabPath.GPU_HEVC_4K60 && !it.attempt.longer && it.attempt.variant.isBlank() }
+            if (gpu60Base != null && gpu60Base.verdict != LabVerdict.OBSERVED) {
+                candidates.firstOrNull {
+                    it.path == LabPath.GPU_HEVC_4K60 && !it.longer && !it.previewOnly && it.variant == "prev_30fps" && it.key !in seen
+                }?.let { gpu60Opt ->
+                    return LabDecision(gpu60Opt, gpu60Base.id, "Stage C: apply single-ctx + realtime codec + 30 fps preview on 4K60 GPU HEVC.")
+                }
             }
         }
         if (log60AnyObserved != null || history.any { it.attempt.path == LabPath.GPU_HEVC_4K60 && it.verdict == LabVerdict.OBSERVED }) {
@@ -143,6 +161,9 @@ internal class LabAutonomousPlanner(
         candidates.firstOrNull { it.path == LabPath.SOURCE_FORMAT_PROBE && it.key !in seen }?.let {
             return LabDecision(it, null, "Stage E (H-08/H-09): probe physical/logical RAW_SENSOR, RAW10, P010 & vendor keys.")
         }
+        candidates.firstOrNull { it.path == LabPath.ISP_CUVA_HDR_PROBE && it.key !in seen }?.let {
+            return LabDecision(it, null, "Stage E (H-09): probe com.huawei.capture.metadata.cuvaStateVideoMode HDR Vivid control & DataSpace.")
+        }
 
         // Stage F: Delegate remaining codec level pair, RAW, HFR 1080p120, and AVC baselines to LabSearch.
         return fallbackSearch.next(history)
@@ -159,9 +180,16 @@ internal class LabAutonomousPlanner(
             LabPath.DIRECT_HEVC_SURFACETEXTURE_360P,
         )
         val candidate = history.lastOrNull { res ->
+            val retryWarranted = res.verdict in setOf(LabVerdict.REVIEW, LabVerdict.INTERRUPTED) ||
+                (res.verdict == LabVerdict.MISMATCH && res.attempt.variant.isBlank() &&
+                    res.attempt.path in setOf(
+                        LabPath.LOG_REGULAR_4K30,
+                        LabPath.DIRECT_HEVC_SURFACETEXTURE,
+                        LabPath.DIRECT_HEVC_SURFACETEXTURE_360P,
+                    ) && !res.attempt.longer)
             res.attempt.retryIndex == 0 &&
                 res.attempt.path in retryablePaths &&
-                res.verdict in setOf(LabVerdict.REVIEW, LabVerdict.INTERRUPTED, LabVerdict.MISMATCH) &&
+                retryWarranted &&
                 res.attempt.copy(retryIndex = 1).key !in seen
         } ?: return null
         val retryAttempt = candidate.attempt.copy(retryIndex = 1)
@@ -179,7 +207,8 @@ internal class LabAutonomousPlanner(
         LabPath.LOG_REGULAR_4K60, LabPath.GPU_HEVC_4K60 -> "Stage C · 4K60 LOG Escalation"
         LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW, LabPath.DIRECT_HEVC_SURFACETEXTURE, LabPath.DIRECT_HEVC_SURFACETEXTURE_360P ->
             "Stage D · Direct 4K60 Sustained"
-        LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.SOURCE_FORMAT_PROBE -> "Stage E · ISP & Source Probe"
+        LabPath.ISP_TONEMAP_AB, LabPath.ISP_COLOR_CORRECTION_PROBE, LabPath.ISP_CUVA_HDR_PROBE, LabPath.SOURCE_FORMAT_PROBE ->
+            "Stage E · ISP & Source Probe"
         LabPath.CODEC_LEVEL_PAIR -> "Stage F · Codec Level Control"
         else -> if (case.hfr) "Stage F · HFR Control" else "Stage F · Baseline"
     }
