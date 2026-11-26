@@ -112,6 +112,7 @@ internal class ResearchLaboratory(
                 LabPath.RAW_CAMERA, LabPath.RAW_NATIVE -> runRaw(case, attempt)
                 LabPath.DIRECT_HEVC, LabPath.DIRECT_HEVC_PREVIEW -> LabDirectRecorder(context, ::checkBudget).run(case, attempt)
                 LabPath.CODEC_LEVEL_PAIR -> runCodecLevelPair(case, attempt, ::checkBudget)
+                LabPath.CODEC_SYNTHETIC_MATRIX -> LabSyntheticEncoderProbe.run(attempt, ::checkBudget)
                 else -> video.run(case, attempt)
             }
             attempt.result(verdict, reason)

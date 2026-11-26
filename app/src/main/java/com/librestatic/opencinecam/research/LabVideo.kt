@@ -14,6 +14,7 @@ import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Size
 import com.librestatic.opencinecam.camera.Camera2PreviewEngine
+import com.librestatic.opencinecam.camera.HevcSpsInspector
 import com.librestatic.opencinecam.camera.Main10FileChecks
 import com.librestatic.opencinecam.camera.Main10TakeKind
 import com.librestatic.opencinecam.camera.OpenCineLogRecordingEvidence
@@ -196,6 +197,12 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
     val fps = cadence.fps
     val directIssue = if (case.path == LabPath.DIRECT_HEVC || case.path == LabPath.DIRECT_HEVC_PREVIEW)
         cadence.shortDirectIssue(case.fps) else null
+    val csd0 = format.getByteBuffer("csd-0")?.duplicate()?.let { buf ->
+        ByteArray(buf.remaining()).also { buf.get(it) }
+    }
+    val spsInfo = if (mime == MediaFormat.MIMETYPE_VIDEO_HEVC && csd0 != null) {
+        HevcSpsInspector.inspect(csd0)
+    } else null
     val issue = when {
         fps == null || pts.size < 2 -> "No usable video cadence in the MP4."
         format.intOrNull(MediaFormat.KEY_WIDTH) != case.width ||
@@ -213,8 +220,25 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
         "format" to format.toString(), "mime" to mime, "profile" to signal.profile,
         "colorStandard" to signal.colorStandard, "colorTransfer" to signal.colorTransfer,
         "codedBitDepthFromProfile" to signal.bitDepth, "effectiveSourcePrecision" to "UNKNOWN",
+        "sps" to spsInfo?.let {
+            json(
+                "profileIdc" to it.profileIdc, "tierFlag" to it.tierFlag, "levelIdc" to it.levelIdc,
+                "chromaFormatIdc" to it.chromaFormatIdc,
+                "codedWidth" to it.codedWidth, "codedHeight" to it.codedHeight,
+                "displayWidth" to it.displayWidth, "displayHeight" to it.displayHeight,
+                "bitDepthLuma" to it.bitDepthLuma, "bitDepthChroma" to it.bitDepthChroma,
+                "vuiPresent" to it.vuiPresent, "fullRange" to it.fullRange,
+                "colourPrimaries" to it.colourPrimaries,
+                "transferCharacteristics" to it.transferCharacteristics,
+                "matrixCoeffs" to it.matrixCoeffs,
+            )
+        },
         "fileSignalCheck" to main10?.status?.name, "fileSignalReason" to main10?.reasonCode,
-        "samplePtsUsInExtractorOrder" to JSONArray(probe.pts), "observedFileFps" to fps,
+        "samplePtsUsInExtractorOrder" to JSONArray(probe.pts),
+        "totalVideoSamples" to probe.totalSamples,
+        "samplePtsTruncated" to probe.truncated,
+        "decodeOrderPtsReversals" to probe.decodeOrderReversals,
+        "observedFileFps" to fps,
         "maxSampleGapUs" to cadence.maxUs, "durationFromPtsUs" to cadence.spanUs,
         "p95GapUs" to cadence.p95Us, "p99GapUs" to cadence.p99Us, "longIntervals" to cadence.longIntervals,
         "duplicatePts" to cadence.repeatedPts, "sampleCount" to cadence.samples,
@@ -228,13 +252,24 @@ internal fun inspectClip(case: LabCase, journal: LabJournal.Attempt): Pair<LabVe
         "clipSha256" to clipSha256(journal.clip), "effectiveSourcePrecision" to "UNKNOWN"))
     if (issue != null) return LabVerdict.MISMATCH to issue
     if (decode.optString("status") != "DECODED") return LabVerdict.MISMATCH to "A decoded frame could not be verified."
-    if (decode.optString("geometryScreen").startsWith("REVIEW_")) {
+    if (decode.optString("geometryScreen").startsWith("REVIEW_") ||
+        decode.optString("codedGeometryAlert").startsWith("REVIEW_")) {
         return LabVerdict.REVIEW to "Near-repeated halves on the same axis. Verify against an asymmetric chart."
+    }
+    if (decode.optString("contentUniqueness") == "STATIC_OR_DUPLICATE") {
+        return LabVerdict.MISMATCH to "Decoded picture content did not change across frames."
     }
     return LabVerdict.OBSERVED to null
 }
 
-private data class LabClip(val format: MediaFormat, val pts: List<Long>, val sampleBytes: Long)
+private data class LabClip(
+    val format: MediaFormat,
+    val pts: List<Long>,
+    val sampleBytes: Long,
+    val totalSamples: Int,
+    val truncated: Boolean,
+    val decodeOrderReversals: Int,
+)
 
 private fun readClip(clip: File): LabClip {
     val extractor = MediaExtractor()
@@ -247,12 +282,20 @@ private fun readClip(clip: File): LabClip {
         extractor.selectTrack(index)
         val pts = mutableListOf<Long>()
         var sampleBytes = 0L
-        while (extractor.sampleTime >= 0 && pts.size < 4_096) {
+        var totalSamples = 0
+        var reversals = 0
+        var prevPts: Long? = null
+        var truncated = false
+        while (extractor.sampleTime >= 0) {
+            val t = extractor.sampleTime
+            totalSamples++
             sampleBytes += extractor.sampleSize
-            pts += extractor.sampleTime
+            if (prevPts != null && t < prevPts) reversals++
+            prevPts = t
+            if (pts.size < 30_000) pts += t else truncated = true
             if (!extractor.advance()) break
         }
-        LabClip(format, pts, sampleBytes)
+        LabClip(format, pts, sampleBytes, totalSamples, truncated, reversals)
     } finally {
         extractor.release()
     }

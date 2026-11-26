@@ -17,6 +17,6 @@
 ## Active build order
 
 1. **Phase 1 (Complete):** Branch `research/autonomous-log-lab`, CI workflow update, `OpenCineCam-research (1).zip` evidence integration, `LabTelemetry.kt` + `telemetry.jsonl`/`pause.json` + cooldown hysteresis, enriched `LabProfiles.inventory()`.
-2. **Phase 2 (Next):** `HevcEncoderLevels`, `HevcSpsInspector`, coded-orientation content-uniqueness & ramp-precision analyzer, synthetic EGL Main8/Main10 matrix (`X-02`/`X-03`).
-3. **Phase 3:** Live 4K30/4K60 regular-session `OCLog2` & GPU HEVC research path, ISP `TONEMAP_MODE_CONTRAST_CURVE` A/B + `RAW_SENSOR`/`P010` source probe, sustained 30 s direct 4K60 + live `SurfaceTexture` preview.
+2. **Phase 2 (Complete on host; awaiting device run):** `HevcEncoderLevels`, `HevcSpsInspector`, coded-orientation `LabDecode`/`LabGeometry`/`LabVideo` upgrades, and `LabSyntheticEncoderProbe` (`CODEC_SYNTHETIC_MATRIX`, `X-02`/`X-03`). Verified via `:core:model:test`, `:camera:testDebugUnitTest`, `:media:testDebugUnitTest`, and `com.librestatic.opencinecam.research.*`.
+3. **Phase 3 (Next):** Live 4K30/4K60 regular-session `OCLog2` & GPU HEVC research path, ISP `TONEMAP_MODE_CONTRAST_CURVE` A/B + `RAW_SENSOR`/`P010` source probe, sustained 30 s direct 4K60 + live `SurfaceTexture` preview.
 4. **Phase 4:** Autonomous planner, cumulative `knowledge.json`, inconclusive retry & contradiction tracking, `report.md`/`report.json` generator, UI readout, full test pass & Research Lab APK build.

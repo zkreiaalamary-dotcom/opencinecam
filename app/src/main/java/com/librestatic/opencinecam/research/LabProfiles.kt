@@ -51,6 +51,7 @@ internal class LabProfiles(private val manager: CameraManager, val descriptor: C
         )
         val all = (seeds + regular + hfr + raw).distinctBy(LabCase::key)
         val probes = buildList {
+            add(LabCase(id, LabPath.CODEC_SYNTHETIC_MATRIX, 3840, 2160, 30, listed = false))
             val fixed60 = descriptor.targetFpsRanges.any { it.lower == 60 && it.upper == 60 }
             if (Size(3840, 2160) in recorderSizes && fixed60) {
                 val direct = LabCase(id, LabPath.DIRECT_HEVC, 3840, 2160, 60, listed = false)

@@ -3,7 +3,7 @@
 
 package com.librestatic.opencinecam.research
 
-internal enum class LabPath { AVC, HEVC, LOG, HLG, HDR10, RAW_CAMERA, RAW_NATIVE, DIRECT_HEVC, DIRECT_HEVC_PREVIEW, CODEC_LEVEL_PAIR }
+internal enum class LabPath { AVC, HEVC, LOG, HLG, HDR10, RAW_CAMERA, RAW_NATIVE, DIRECT_HEVC, DIRECT_HEVC_PREVIEW, CODEC_LEVEL_PAIR, CODEC_SYNTHETIC_MATRIX }
 internal enum class LabStage { REQUESTED, CAMERA, PREVIEW, FIRST_CAMERA_RESULT, RECORDER, FIRST_GPU_FRAME, FIRST_ENCODED, STOPPED, RELEASED, FILE, RAW }
 internal enum class LabVerdict { OBSERVED, MISMATCH, FAILED, INTERRUPTED, STOPPED, ADMITTED, REVIEW }
 
@@ -32,6 +32,9 @@ internal class LabSearch(private val candidates: List<LabCase>) {
         val seen = history.map { it.attempt.key }.toSet()
         val pending = candidates.filterNot { it.key in seen }
         // Reserve the causal controls before adaptive neighbours consume the run budget.
+        pending.firstOrNull { it.path == LabPath.CODEC_SYNTHETIC_MATRIX }?.let {
+            return LabDecision(it, null, "X-02/X-03: run camera-closed synthetic Main8/Main10 encoder & geometry isolation matrix.")
+        }
         val direct = pending.firstOrNull { it.path == LabPath.DIRECT_HEVC }
         if (direct != null) return LabDecision(direct, null, "X-01: measure the regular recorder-only UHD60 graph.")
         val paired = pending.firstOrNull { it.path == LabPath.DIRECT_HEVC_PREVIEW }
