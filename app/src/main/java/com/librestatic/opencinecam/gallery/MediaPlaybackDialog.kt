@@ -51,9 +51,11 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
@@ -390,39 +392,58 @@ private fun MediaPlaybackView(take: LocalMediaTake, artifact: LocalMediaArtifact
     val raw = take.kind == LocalMediaKind.RAW_VIDEO
     val video = raw || artifact.mimeType.startsWith("video/")
     val photo = !raw && artifact.mimeType.startsWith("image/")
-    // OCLog2 is declared only by the sidecar; the session waits for that answer so it never starts as SDR.
+    // OCLog2 is declared only by the sidecar; HDR (HLG/PQ) by the container transfer. Wait for both
+    // so the player opens directly into its final path and SurfaceView sizing on API < 33.
     var logResolved by remember(artifact) { mutableStateOf(!video || raw) }
     var logClip by remember(artifact) { mutableStateOf<OcLogClip?>(null) }
+    var hdrClip by remember(artifact) { mutableStateOf(false) }
     LaunchedEffect(take, artifact) {
         if (video && !raw) {
-            logClip = withContext(Dispatchers.IO) { runCatching { readOcLogClip(context.contentResolver, take, artifact) }.getOrNull() }
+            val loadedLog = withContext(Dispatchers.IO) { runCatching { readOcLogClip(context.contentResolver, take, artifact) }.getOrNull() }
+            val loadedHdr = if (loadedLog == null) {
+                withContext(Dispatchers.IO) { isHdrVideoTrack(context, artifact.uri) }
+            } else false
+            logClip = loadedLog
+            hdrClip = loadedHdr
             logResolved = true
         }
     }
     val currentSettings by rememberUpdatedState(settings)
+    var session by remember(artifact) { mutableStateOf<PlaybackController?>(null) }
     var renderer by remember(artifact) { mutableStateOf<LogPlaybackRenderer?>(null) }
     var stageError by remember(artifact) { mutableStateOf<String?>(null) }
+    var surfaceSize by remember(artifact) { mutableStateOf<Pair<Int, Int>?>(null) }
     /** OCLog2 clips decode into the review GL stage, which draws the selected view to the holder Surface. */
     fun output(holder: Surface?): Surface? {
         val clip = logClip
         if (holder == null || !holder.isValid || clip == null) return holder
         val stage = renderer ?: runCatching { LogPlaybackRenderer(holder, clip.signal, currentSettings.logView) }
-            .onFailure { stageError = it.message ?: it.javaClass.simpleName }.getOrNull()?.also { renderer = it }
+            .onFailure { stageError = it.message ?: it.javaClass.simpleName }.getOrNull()?.also {
+                renderer = it
+                surfaceSize?.let { (w, h) -> it.resize(w, h) }
+            }
         return stage?.inputSurface ?: holder
     }
-    fun retireStage() { renderer?.close(); renderer = null }
+    fun retireStage() {
+        (session as? MediaPlaybackSession)?.setSurfaceRenderConfirmation(null)
+        renderer?.close(); renderer = null
+    }
     DisposableEffect(artifact) { onDispose { retireStage() } }
     LaunchedEffect(renderer, settings.logView) { renderer?.setView(settings.logView) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    // Direct display output is a device setting; the error card can still switch it for this member alone.
+    // Direct display output is a device setting; API < 33 has no CPU P010 readback so OCLog2
+    // and HDR (HLG/PQ) open directly on display surfaces while keeping user/error-card overrides intact.
     var nativeOverride by remember(artifact, settings.nativeSurfaceFrames) { mutableStateOf<Boolean?>(null) }
-    val nativeFrames = video && !raw && (nativeOverride ?: settings.nativeSurfaceFrames)
+    val defaultNativeFrames = shouldDefaultNativeSurfaceFrames(
+        settings.nativeSurfaceFrames,
+        logClip != null,
+        Build.VERSION.SDK_INT,
+        isHdrClip = hdrClip,
+    )
+    val nativeFrames = video && !raw && (nativeOverride ?: defaultNativeFrames)
     // Another output starts from a blank observation and strict colour, as switching it always did.
     var state by remember(artifact, nativeFrames) { mutableStateOf(PlaybackObservation()) }
-    var session by remember(artifact) { mutableStateOf<PlaybackController?>(null) }
     var surface by remember(artifact) { mutableStateOf<Surface?>(null) }
-    // RAW draws with its own GL stage, which letterboxes to the holder's size.
-    var surfaceSize by remember(artifact) { mutableStateOf<Pair<Int, Int>?>(null) }
     var surfaceView by remember(artifact) { mutableStateOf<SurfaceView?>(null) }
     var displayHdrTypes by remember(artifact) { mutableStateOf(emptySet<Int>()) }
     val retiring = remember { arrayOf<java.util.concurrent.CompletableFuture<Unit>?>(null) }
@@ -460,7 +481,9 @@ private fun MediaPlaybackView(take: LocalMediaTake, artifact: LocalMediaArtifact
                 reader = next; session = next
                 if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) next.suspendOutput()
                 surfaceSize?.let { (width, height) -> next.setSurfaceSize(width, height) }
-                next.setSurface(output(surface))
+                val targetSurface = output(surface)
+                (next as? MediaPlaybackSession)?.setSurfaceRenderConfirmation(renderer)
+                next.setSurface(targetSurface)
             }
         }
         val previous = retiring[0]
@@ -627,12 +650,14 @@ private fun MediaPlaybackView(take: LocalMediaTake, artifact: LocalMediaArtifact
                 val sentence = stringResource(R.string.media_playback_exact, exact + 1, timestamps.size, playbackSeconds(timestamps[exact], locale))
                 Text(stringResource(R.string.playback_screen_frame_counter, exact + 1, timestamps.size),
                     modifier.testTag("media-playback-exact").semantics { contentDescription = sentence },
-                    color = LocalCineColors.current.verified, fontSize = 14.sp, fontFamily = FontFamily.Monospace, maxLines = 1,
+                    color = LocalCineColors.current.verified, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+                    style = TextStyle(textDirection = TextDirection.Content), maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
             }
             video -> Text(if (frame != null && totalFrames != null)
                     stringResource(R.string.playback_layout_frame_estimate, (frame + 1).coerceAtMost(totalFrames), totalFrames) else "",
                 modifier.testTag("media-playback-estimated"), color = SettingsMuted, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+                style = TextStyle(textDirection = TextDirection.Content),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             else -> Text(stringResource(R.string.media_playback_estimated, state.positionUs / 1000), modifier.testTag("media-playback-estimated"),
                 color = SettingsMuted, fontSize = 14.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -807,17 +832,22 @@ private fun MediaPlaybackView(take: LocalMediaTake, artifact: LocalMediaArtifact
                                     holder.surfaceFrame.takeIf { !it.isEmpty }?.let { frame ->
                                         surfaceSize = frame.width() to frame.height(); session?.setSurfaceSize(frame.width(), frame.height())
                                     }
-                                    session?.setSurface(output(holder.surface))
+                                    val targetSurface = output(holder.surface)
+                                    (session as? MediaPlaybackSession)?.setSurfaceRenderConfirmation(renderer)
+                                    session?.setSurface(targetSurface)
                                 },
                                 onSurfaceChanged = { holder, width, height ->
                                     surface = holder.surface; updateDisplay(); renderer?.resize(width, height)
                                     surfaceSize = width to height; session?.setSurfaceSize(width, height)
-                                    session?.setSurface(output(holder.surface))
+                                    val targetSurface = output(holder.surface)
+                                    (session as? MediaPlaybackSession)?.setSurfaceRenderConfirmation(renderer)
+                                    session?.setSurface(targetSurface)
                                 },
                                 onSurfaceDestroyed = {
                                     // Producers first, then the GL stage's window, before the holder destroys its Surface.
                                     session?.setSurface(null); retireStage(); surface = null; surfaceSize = null; displayHdrTypes = emptySet()
-                                }) {
+                                },
+                                surfaceReady = !video || raw || logResolved) {
                                 // A failure takes the stage itself, where the missing picture is, rather than a card below the fold.
                                 if (state.phase == PlaybackPhase.ERROR) Box(Modifier.matchParentSize()
                                     .background(MaterialTheme.colorScheme.background.copy(alpha = 0.92f)).verticalScroll(rememberScrollState())
@@ -993,7 +1023,8 @@ internal fun PlaybackStageArea(modifier: Modifier, artifact: LocalMediaArtifact,
     state: PlaybackObservation, shown: Bitmap?, poster: Bitmap?, fullscreen: Boolean, zoom: MediaZoomState,
     zoomScope: kotlinx.coroutines.CoroutineScope, zoomEnabled: Boolean, surfaceZoom: Boolean, onTap: (() -> Unit)?,
     onSurfaceView: (SurfaceView) -> Unit, onSurfaceCreated: (SurfaceHolder) -> Unit, onSurfaceChanged: (SurfaceHolder, Int, Int) -> Unit,
-    onSurfaceDestroyed: () -> Unit, glSurface: Boolean = false, fill: Boolean = false, overlay: @Composable BoxScope.() -> Unit) {
+    onSurfaceDestroyed: () -> Unit, glSurface: Boolean = false, fill: Boolean = false, surfaceReady: Boolean = true,
+    overlay: @Composable BoxScope.() -> Unit) {
     val picture = video || photo
     BoxWithConstraints(modifier.background(if (fullscreen || picture) Color.Black else Color.Transparent).clipToBounds()
         .mediaZoomGestures(zoom, zoomScope, zoomEnabled, onTap)) {
@@ -1010,7 +1041,7 @@ internal fun PlaybackStageArea(modifier: Modifier, artifact: LocalMediaArtifact,
         LaunchedEffect(zoom, displayed) { if (filling && !zoom.filled) zoom.fill() }
         LaunchedEffect(zoom, zoomEnabled) { if (!zoomEnabled) zoom.reset() }
         if (picture) PlaybackStage(artifact, video, aspect, state, shown, poster, zoom, surfaceZoom, glSurface, onSurfaceView,
-            onSurfaceCreated, onSurfaceChanged, onSurfaceDestroyed)
+            onSurfaceCreated, onSurfaceChanged, onSurfaceDestroyed, surfaceReady)
         else {
             val (width, height) = fitInside(null, maxWidth.value, maxHeight.value)
             Box(Modifier.align(Alignment.Center).size(width.dp, height.dp).background(SettingsSurface)) {
@@ -1033,7 +1064,7 @@ internal fun PlaybackStageArea(modifier: Modifier, artifact: LocalMediaArtifact,
 private fun BoxScope.PlaybackStage(artifact: LocalMediaArtifact, video: Boolean, aspect: Float?, state: PlaybackObservation,
     shown: Bitmap?, poster: Bitmap?, zoom: MediaZoomState, surfaceZoom: Boolean, glSurface: Boolean,
     onSurfaceView: (SurfaceView) -> Unit, onSurfaceCreated: (SurfaceHolder) -> Unit, onSurfaceChanged: (SurfaceHolder, Int, Int) -> Unit,
-    onSurfaceDestroyed: () -> Unit) {
+    onSurfaceDestroyed: () -> Unit, surfaceReady: Boolean = true) {
     val created by rememberUpdatedState(onSurfaceCreated)
     val changed by rememberUpdatedState(onSurfaceChanged)
     val destroyed by rememberUpdatedState(onSurfaceDestroyed)
@@ -1046,7 +1077,7 @@ private fun BoxScope.PlaybackStage(artifact: LocalMediaArtifact, video: Boolean,
             SideEffect { zoom.content = box }
             // SurfaceView preserves the decoder/compositor HDR path; TextureView can flatten it
             // to SDR. The SurfaceHolder owns its Surface, so never release that Surface ourselves.
-            AndroidView(factory = { ctx ->
+            if (surfaceReady) AndroidView(factory = { ctx ->
                 SurfaceView(ctx).apply {
                     tag = "media-playback-native-surface"
                     onSurfaceView(this)
@@ -1243,3 +1274,18 @@ internal fun playbackFitScale(videoWidth: Int, videoHeight: Int, viewWidth: Int,
     val scale = minOf(viewWidth.toFloat() / videoWidth, viewHeight.toFloat() / videoHeight)
     return videoWidth * scale / viewWidth to videoHeight * scale / viewHeight
 }
+
+/** True when the container video track declares HLG or PQ (10-bit HDR needing API < 33 direct Surface review). */
+private fun isHdrVideoTrack(context: android.content.Context, uri: String): Boolean = runCatching {
+    val retriever = android.media.MediaMetadataRetriever()
+    try {
+        retriever.setDataSource(context, android.net.Uri.parse(uri))
+        val transfer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_COLOR_TRANSFER)?.toIntOrNull()
+        } else null
+        transfer == android.media.MediaFormat.COLOR_TRANSFER_HLG ||
+            transfer == android.media.MediaFormat.COLOR_TRANSFER_ST2084
+    } finally {
+        runCatching { retriever.release() }
+    }
+}.getOrDefault(false)

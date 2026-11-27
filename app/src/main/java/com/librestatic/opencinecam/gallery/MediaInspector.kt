@@ -32,8 +32,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -174,7 +176,8 @@ private fun DetailChip(text: String, accent: Boolean = false, color: Color? = nu
         .border(1.dp, tint ?: SettingsBorder, RoundedCornerShape(8.dp))
         .padding(horizontal = 10.dp, vertical = 5.dp)
         .then(tag?.let { Modifier.testTag(it) } ?: Modifier),
-        color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, maxLines = 1)
+        color = tint ?: MaterialTheme.colorScheme.onSurface, fontSize = 12.sp,
+        style = TextStyle(textDirection = TextDirection.Content), maxLines = 1)
 }
 
 @Composable

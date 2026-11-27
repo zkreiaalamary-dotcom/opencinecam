@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -146,6 +147,7 @@ internal fun CaptureStatusLine(state: CameraUiState, modifier: Modifier = Modifi
         lineHeight = 15.sp,
         fontWeight = FontWeight.SemiBold,
         textAlign = textAlign ?: TextAlign.Unspecified,
+        textDirection = TextDirection.Ltr,
     ))
     val marquee = rememberMarqueeActive()
     val measurer = rememberTextMeasurer()

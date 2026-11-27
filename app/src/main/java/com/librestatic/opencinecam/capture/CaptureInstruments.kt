@@ -38,6 +38,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.librestatic.opencinecam.service.CaptureService
@@ -118,7 +120,7 @@ internal fun InstrumentStack(
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FittingStack(horizontal, spacing = 8.dp, fillLast = stretchHistogram,
-                obstacle = if (horizontal && !stretchHistogram) endObstacle else null, obstacleAtStart = obstacleAtStart,
+                obstacle = if (!stretchHistogram) endObstacle else null, obstacleAtStart = obstacleAtStart,
                 wrapCross = horizontal && showNotice, modifier = if (horizontal && showNotice) Modifier else Modifier.weight(1f)) {
                 if (showLogSource) LogSourceBadge(state, settings, Modifier.widthIn(max = badgeMaxWidth))
                 if (showLowLight) LowLightBoostBadge(Modifier.widthIn(max = badgeMaxWidth))
@@ -174,6 +176,7 @@ private fun FittingStack(
         } else measurables.map { it.measure(loose) }
         val positions = ArrayList<Pair<androidx.compose.ui.layout.Placeable, IntOffset>>()
         val corner = obstacle?.takeIf { horizontal }
+        val verticalObstacle = obstacle?.takeIf { !horizontal }
         val lineStart = if (corner != null && obstacleAtStart) corner.x else 0
         var cursor = lineStart
         // The second line, opened under the corner once an item would reach into it.
@@ -184,6 +187,12 @@ private fun FittingStack(
             val cross = if (horizontal) item.height else item.width
             val mainLimit = if (horizontal) constraints.maxWidth else constraints.maxHeight
             val crossLimit = if (horizontal) constraints.maxHeight else constraints.maxWidth
+            if (!horizontal && verticalObstacle != null) {
+                val besideWidth = (constraints.maxWidth - verticalObstacle.x - gap).coerceAtLeast(0)
+                if (cursor < verticalObstacle.y + gap && item.width > besideWidth) {
+                    cursor = maxOf(cursor, verticalObstacle.y + gap)
+                }
+            }
             val lineLimit = if (corner != null && lineTop == 0 && !obstacleAtStart) mainLimit - corner.x else mainLimit
             if (corner != null && lineTop == 0 && cursor + main > lineLimit && main <= mainLimit) {
                 lineTop = maxOf(firstLineHeight, corner.y) + gap
@@ -191,7 +200,8 @@ private fun FittingStack(
             }
             val limit = if (corner != null && lineTop == 0 && !obstacleAtStart) mainLimit - corner.x else mainLimit
             if (cursor + main <= limit && cross <= crossLimit - lineTop) {
-                positions += item to if (horizontal) IntOffset(cursor, lineTop) else IntOffset(0, cursor)
+                positions += item to if (horizontal) IntOffset(cursor, lineTop)
+                else IntOffset(if (obstacleAtStart) (constraints.maxWidth - item.width).coerceAtLeast(0) else 0, cursor)
                 cursor += main + gap
                 if (lineTop == 0) firstLineHeight = maxOf(firstLineHeight, cross)
             }
@@ -247,6 +257,7 @@ private fun ZoomReadout(state: CameraUiState, binder: CaptureService.LocalBinder
                 color = Amber,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
+                style = TextStyle(textDirection = TextDirection.Ltr),
                 maxLines = 1,
                 softWrap = false,
             )

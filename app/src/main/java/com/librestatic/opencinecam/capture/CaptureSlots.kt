@@ -42,6 +42,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -330,14 +331,21 @@ private fun SlotLabel(text: String, color: Color, align: TextAlign = TextAlign.C
 
 private const val SLOT_LABEL_MIN_SP = 10
 
-/** Values stay between 14 and 16 sp: the size steps down before a value such as 1/8000 is cut. */
+/** Values stay between 11 and 16 sp with LTR direction so compact codes like "4K+" never clip or flip in RTL. */
 @Composable
 private fun SlotValue(text: String, color: Color, align: TextAlign) {
     BasicText(
         text,
-        style = TextStyle(color = color, fontSize = 16.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold, textAlign = align),
+        style = TextStyle(
+            color = color,
+            fontSize = 16.sp,
+            lineHeight = 18.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = align,
+            textDirection = TextDirection.Ltr,
+        ),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        autoSize = TextAutoSize.StepBased(minFontSize = 14.sp, maxFontSize = 16.sp),
+        autoSize = TextAutoSize.StepBased(minFontSize = 11.sp, maxFontSize = 16.sp),
     )
 }

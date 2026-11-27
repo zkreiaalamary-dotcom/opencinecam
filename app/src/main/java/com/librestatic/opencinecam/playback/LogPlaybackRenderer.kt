@@ -17,6 +17,7 @@ import com.librestatic.opencinecam.camera.GpuEglDisplayLease
 import com.librestatic.opencinecam.camera.OpenCineLogYcbcrConversion
 import com.librestatic.opencinecam.storage.PreciseLogSignal
 import com.librestatic.opencinecam.storage.PreciseLogView
+import com.librestatic.opencinecam.storage.SurfaceFrameRenderConfirmation
 import com.librestatic.opencinecam.gallery.zoomedQuad
 import java.io.Closeable
 import java.nio.ByteBuffer
@@ -31,7 +32,12 @@ import java.util.concurrent.TimeUnit
  * When the GPU exposes raw YCbCr (GL_EXT_YUV_target) the shader converts BT.2020 itself, because some
  * drivers' external samplers ignore the buffer's matrix and range.
  */
-internal class LogPlaybackRenderer(output: Surface, private val signal: PreciseLogSignal, view: PreciseLogView) : Closeable {
+internal class LogPlaybackRenderer(output: Surface, private val signal: PreciseLogSignal, view: PreciseLogView) : Closeable, SurfaceFrameRenderConfirmation {
+    private data class RenderWaiter(val targetPtsUs: Long, val minSwapSeq: Long, val onRendered: (Long) -> Unit)
+    private val waiterLock = Any()
+    private var pendingWaiter: RenderWaiter? = null
+    private var swapSequence = 0L
+    private var lastLatchedPtsUs: Long? = null
     private val thread = HandlerThread("oclog-review-gl").apply { start() }
     private val handler = Handler(thread.looper)
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -145,6 +151,17 @@ internal class LogPlaybackRenderer(output: Surface, private val signal: PreciseL
         return linkProgram(VERTEX_SHADER, reviewFragmentShader(shaderYcbcr = false))
     }
 
+    override fun awaitFrame(targetPtsUs: Long, onRendered: (Long) -> Unit): AutoCloseable {
+        val waiter = synchronized(waiterLock) {
+            RenderWaiter(targetPtsUs, swapSequence, onRendered).also { pendingWaiter = it }
+        }
+        return AutoCloseable {
+            synchronized(waiterLock) {
+                if (pendingWaiter === waiter) pendingWaiter = null
+            }
+        }
+    }
+
     private fun latch() {
         if (closed) return
         val source = surfaceTexture ?: return
@@ -152,6 +169,7 @@ internal class LogPlaybackRenderer(output: Surface, private val signal: PreciseL
             check(EGL14.eglMakeCurrent(display, window, window, context)) { "Review EGL context is unavailable" }
             source.updateTexImage()
             source.getTransformMatrix(textureMatrix)
+            lastLatchedPtsUs = source.timestamp / 1_000L
             hasFrame = true
             draw()
         } catch (failure: Exception) {
@@ -159,10 +177,21 @@ internal class LogPlaybackRenderer(output: Surface, private val signal: PreciseL
         }
     }
 
-    private fun draw() {
-        if (closed || !hasFrame || width <= 0 || height <= 0) return
+    private fun draw(redrawAfterResize: Boolean = true) {
+        if (closed || !hasFrame) return
         check(EGL14.eglMakeCurrent(display, window, window, context)) { "Review EGL context is unavailable" }
-        GLES30.glViewport(0, 0, width, height)
+        val queried = IntArray(2)
+        if (EGL14.eglQuerySurface(display, window, EGL14.EGL_WIDTH, queried, 0) &&
+            EGL14.eglQuerySurface(display, window, EGL14.EGL_HEIGHT, queried, 1) &&
+            queried[0] > 0 && queried[1] > 0
+        ) {
+            width = queried[0]
+            height = queried[1]
+        }
+        if (width <= 0 || height <= 0) return
+        val drawWidth = width
+        val drawHeight = height
+        GLES30.glViewport(0, 0, drawWidth, drawHeight)
         GLES30.glClearColor(0f, 0f, 0f, 1f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(program)
@@ -174,13 +203,43 @@ internal class LogPlaybackRenderer(output: Surface, private val signal: PreciseL
         GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uViewGain"), signal.viewGain.toFloat())
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLegacyBt709"), if (signal.legacyBt709Primaries) 1 else 0)
         GLES30.glUniform4fv(GLES30.glGetUniformLocation(program, "uZoom"), 1,
-            zoomedQuad(if (frameWidth > 0 && frameHeight > 0) RawDevelop.letterbox(frameWidth, frameHeight, width, height)
-                else intArrayOf(0, 0, width, height), width, height, zoomScale, zoomX, zoomY), 0)
+            zoomedQuad(if (frameWidth > 0 && frameHeight > 0) RawDevelop.letterbox(frameWidth, frameHeight, drawWidth, drawHeight)
+                else intArrayOf(0, 0, drawWidth, drawHeight), drawWidth, drawHeight, zoomScale, zoomX, zoomY), 0)
         GLES30.glEnableVertexAttribArray(0)
         GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 0, QUAD)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glDisableVertexAttribArray(0)
-        EGL14.eglSwapBuffers(display, window)
+        if (EGL14.eglSwapBuffers(display, window)) {
+            val ptsUs = lastLatchedPtsUs
+            val nowNs = System.nanoTime()
+            val seq = synchronized(waiterLock) { ++swapSequence }
+            if (seq <= 3L) {
+                android.util.Log.d(
+                    TAG,
+                    "draw frame swap=$seq surface=${drawWidth}x${drawHeight} frame=${frameWidth}x${frameHeight} pts=$ptsUs shaderYcbcr=$shaderYcbcr",
+                )
+            }
+            val matched = synchronized(waiterLock) {
+                val waiter = pendingWaiter
+                if (waiter != null && seq > waiter.minSwapSeq && ptsUs != null &&
+                    (kotlin.math.abs(ptsUs - waiter.targetPtsUs) <= 1_000L || ptsUs <= 0L)
+                ) {
+                    pendingWaiter = null
+                    waiter
+                } else null
+            }
+            matched?.onRendered?.invoke(nowNs)
+            if (redrawAfterResize &&
+                EGL14.eglQuerySurface(display, window, EGL14.EGL_WIDTH, queried, 0) &&
+                EGL14.eglQuerySurface(display, window, EGL14.EGL_HEIGHT, queried, 1) &&
+                queried[0] > 0 && queried[1] > 0 &&
+                (queried[0] != drawWidth || queried[1] != drawHeight)
+            ) {
+                width = queried[0]
+                height = queried[1]
+                draw(redrawAfterResize = false)
+            }
+        }
     }
 
     private fun release() {

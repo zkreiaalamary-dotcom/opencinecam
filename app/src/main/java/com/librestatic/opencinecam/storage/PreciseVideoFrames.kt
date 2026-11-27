@@ -30,6 +30,15 @@ data class DecodedVideoFrame(val bitmap: Bitmap, val presentationTimeUs: Long, v
 
 data class RenderedVideoFrame(val presentationTimeUs: Long, val index: Int, val renderedAtNs: Long, val displayWidth: Int, val displayHeight: Int)
 
+/**
+ * Observes display swap completion when a Surface destination renders through an intermediate
+ * GL consumer ([LogPlaybackRenderer]) where Android's `MediaCodec.OnFrameRenderedListener` is
+ * omitted on API < 33.
+ */
+fun interface SurfaceFrameRenderConfirmation {
+    fun awaitFrame(targetPtsUs: Long, onRendered: (renderedAtNs: Long) -> Unit): AutoCloseable
+}
+
 /** Construct and call frame on serial IO. A missing exact PTS is an error, never nearest-frame fallback.
  * Bounds: 250000 samples, 30 seconds per index/decode, 64 MiB per compressed sample,
  * 8192 pixels per edge and 4096*2160 output pixels. SDR8 YUV420 and API33+ P010 PQ/HLG
@@ -124,13 +133,15 @@ class PreciseVideoFrames(context: Context, uri: String, private val colorPolicy:
 
     /** Caller serializes all producers on this Surface. No CPU image or P010 requirement.
      * Exactness is confirmed by codec identity + output PTS + render callback, not queue success.
-     * API23-33 may omit callbacks; that is an unconfirmed render error, never exact acceptance. */
+     * API23-33 may omit callbacks on SurfaceTexture targets; [renderConfirmation] supplies
+     * display-swap confirmation from the GL review stage when present. */
     @Synchronized
-    fun frameToSurface(index: Int, surface: Surface): RenderedVideoFrame = requireNotNull(decode(index, surface).rendered)
+    fun frameToSurface(index: Int, surface: Surface, renderConfirmation: SurfaceFrameRenderConfirmation? = null): RenderedVideoFrame =
+        requireNotNull(decode(index, surface, renderConfirmation).rendered)
 
     private data class Output(val cpu: DecodedVideoFrame? = null, val rendered: RenderedVideoFrame? = null)
 
-    private fun decode(index: Int, surface: Surface?): Output {
+    private fun decode(index: Int, surface: Surface?, renderConfirmation: SurfaceFrameRenderConfirmation? = null): Output {
         check(!closed) { "Precise video reader is closed" }
         require(index in timeline.timestampsUs.indices) { "Frame index is out of range" }
         val deadline = deadline()
@@ -227,12 +238,21 @@ class PreciseVideoFrames(context: Context, uri: String, private val colorPolicy:
                                         val geometry = displayGeometry(outputFormat)
                                         checkWork(deadline)
                                         require(surface.isValid) { "Exact frame Surface retired" }
-                                        renderActive.set(true)
-                                        codec.releaseOutputBuffer(output, true); released = true
-                                        while (!renderLatch.await(50, TimeUnit.MILLISECONDS)) {
-                                            if (System.nanoTime() - deadline >= 0) throw TimeoutException("Exact frame render unconfirmed: PTS=$target")
-                                            checkWork(deadline)
-                                            require(surface.isValid) { "Exact frame Surface retired before render confirmation" }
+                                        val externalWaiter = renderConfirmation?.awaitFrame(target) { nanoTime ->
+                                            if (renderActive.get() && surface.isValid) {
+                                                renderedNs.set(nanoTime); renderLatch.countDown()
+                                            }
+                                        }
+                                        try {
+                                            renderActive.set(true)
+                                            codec.releaseOutputBuffer(output, true); released = true
+                                            while (!renderLatch.await(50, TimeUnit.MILLISECONDS)) {
+                                                if (System.nanoTime() - deadline >= 0) throw TimeoutException("Exact frame render unconfirmed: PTS=$target")
+                                                checkWork(deadline)
+                                                require(surface.isValid) { "Exact frame Surface retired before render confirmation" }
+                                            }
+                                        } finally {
+                                            runCatching { externalWaiter?.close() }
                                         }
                                         checkWork(deadline)
                                         require(surface.isValid) { "Exact frame Surface retired after render confirmation" }

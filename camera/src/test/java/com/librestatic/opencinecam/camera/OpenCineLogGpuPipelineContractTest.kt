@@ -226,6 +226,115 @@ class OpenCineLogGpuPipelineContractTest {
         assertTrue(linear.map(OpenCineLog2Curve::encode).zipWithNext().all { (a, b) -> b > a })
     }
 
+    @Test
+    fun imageReaderTextureMatrixMatchesSurfaceTextureDetAndRotatesAsymmetricCorners() {
+        fun sampleUv(m: FloatArray, u0: Float, v0: Float): Pair<Float, Float> {
+            val s = m[0] * u0 + m[4] * v0 + m[12]
+            val t = m[1] * u0 + m[5] * v0 + m[13]
+            return s to t
+        }
+        for (sensor in listOf(0, 90, 180, 270)) {
+            val m = imageReaderTextureMatrix(sensor)
+            assertEquals(-1f, m[0] * m[5] - m[4] * m[1], 1e-6f)
+            // unmirrorSurfaceTextureMatrix must be a no-op when det is already -1
+            val copy = m.copyOf()
+            unmirrorSurfaceTextureMatrix(copy)
+            assertTrue(m.contentEquals(copy))
+        }
+        // 0 deg: Y-flip only -> TL(0,1) reads raw (0,0), TR(1,1)->(1,0), BL(0,0)->(0,1), BR(1,0)->(1,1)
+        val m0 = imageReaderTextureMatrix(0)
+        assertEquals(0f to 0f, sampleUv(m0, 0f, 1f))
+        assertEquals(1f to 0f, sampleUv(m0, 1f, 1f))
+        assertEquals(0f to 1f, sampleUv(m0, 0f, 0f))
+        assertEquals(1f to 1f, sampleUv(m0, 1f, 0f))
+
+        // 90 deg CW sensor: rotating raw 90 CW puts raw TL(0,0) at TR(1,1), BL(0,1) at TL(0,1), TR(1,0) at BR(1,0)
+        val m90 = imageReaderTextureMatrix(90)
+        assertEquals(0f to 1f, sampleUv(m90, 0f, 1f))
+        assertEquals(0f to 0f, sampleUv(m90, 1f, 1f))
+        assertEquals(1f to 1f, sampleUv(m90, 0f, 0f))
+        assertEquals(1f to 0f, sampleUv(m90, 1f, 0f))
+
+        // 270 deg CW sensor (front camera): rotating raw 270 CW puts raw TL(0,0) at BL(0,0), TR(1,0) at TL(0,1), BL(0,1) at BR(1,0)
+        val m270 = imageReaderTextureMatrix(270)
+        assertEquals(1f to 0f, sampleUv(m270, 0f, 1f))
+        assertEquals(1f to 1f, sampleUv(m270, 1f, 1f))
+        assertEquals(0f to 0f, sampleUv(m270, 0f, 0f))
+        assertEquals(0f to 1f, sampleUv(m270, 1f, 0f))
+
+        assertThrows(IllegalArgumentException::class.java) { imageReaderTextureMatrix(45) }
+    }
+
+    @Test
+    fun vertexQuadCompositionPreservesUprightAxesAcrossPreviewAndRecordingRotations() {
+        // Simulates VERTEX_SHADER position rotation + mirror and texture UV lookup against
+        // a 16:9 horizontal camera sensor (natural top=(0..1, t=0), bottom=(0..1, t=1), left=s=0, right=s=1).
+        fun sampleAtScreenCorner(
+            sensor: Int,
+            positionRotationDeg: Int,
+            mirrorHoriz: Boolean,
+            targetX: Float,
+            targetY: Float,
+        ): Pair<Float, Float> {
+            val m = imageReaderTextureMatrix(sensor)
+            val rotStep = positionRotationDeg / 90
+            // Solve backwards which input vertex aPosition lands at (targetX, targetY)
+            for (ax in listOf(-1f, 1f)) {
+                for (ay in listOf(-1f, 1f)) {
+                    var px = ax
+                    var py = ay
+                    when (rotStep) {
+                        1 -> { val nx = py; val ny = -px; px = nx; py = ny }
+                        2 -> { px = -px; py = -py }
+                        3 -> { val nx = -py; val ny = px; px = nx; py = ny }
+                    }
+                    if (mirrorHoriz) px = -px
+                    if (px == targetX && py == targetY) {
+                        val u0 = (ax + 1f) * 0.5f
+                        val v0 = (ay + 1f) * 0.5f
+                        return (m[0] * u0 + m[4] * v0 + m[12]) to (m[1] * u0 + m[5] * v0 + m[13])
+                    }
+                }
+            }
+            error("Corner not found")
+        }
+
+        // Held portrait (display=0): back sensor 90 -> upright physical world has sky at raw s=0, floor at s=1.
+        //Wait: for 90 deg CW raw buffer, raw LEFT (s=0) is sky/top of room when portrait!
+        //Wait: check both RecordingGeometry (COMPATIBLE & NATIVE_RASTER) and PreviewGeometry agree 100%!
+        for (sensor in listOf(90, 270)) {
+            val frontFacing = sensor == 270
+            val lensFacing = if (frontFacing) 0 else 1
+            for (orient in listOf(0, 90, 180, 270)) {
+                // Note: Display rotation and deviceOrientation have opposite signs for 90 vs 270, so use matching display rotation:
+                // deviceOrientation = (360 - displayRotation) % 360 -> test RecordingGeometry rendererRotation matches PreviewGeometry when display == (360 - device)%360
+                val displayRot = (360 - orient) % 360
+                val previewGeom = OpenCineLogPreviewGeometryCalculator.calculate(
+                    sourceWidth = 1920, sourceHeight = 1080,
+                    targetWidth = 1080, targetHeight = 1920,
+                    sensorOrientationDegrees = sensor, displayRotationDegrees = displayRot,
+                    frontFacing = frontFacing,
+                )
+                val recGeom = RecordingGeometryCalculator.calculate(
+                    sourceWidth = 1920, sourceHeight = 1080,
+                    sensorOrientationDegrees = sensor, deviceOrientationDegrees = orient,
+                    lensFacing = lensFacing, mode = RecordingGeometryMode.COMPATIBLE,
+                )
+                // Recording rendererRotation equals preview positionRotation (only unmirrored)!
+                assertEquals(previewGeom.positionRotationDegrees, recGeom.rendererRotationDegrees)
+                // Portrait (display=0, orient=0): TL/TR share top-edge buffer axis, BL/BR share bottom-edge buffer axis
+                if (orient == 0) {
+                    val tl = sampleAtScreenCorner(sensor, previewGeom.positionRotationDegrees, false, -1f, 1f)
+                    val tr = sampleAtScreenCorner(sensor, previewGeom.positionRotationDegrees, false, 1f, 1f)
+                    val bl = sampleAtScreenCorner(sensor, previewGeom.positionRotationDegrees, false, -1f, -1f)
+                    // TL & TR must lie along the SAME sensor row/col edge (for 90: s=0, for 270: s=1), orthogonal to BL
+                    assertEquals(tl.first, tr.first, 1e-6f)
+                    assertNotEquals(tl.first, bl.first, 1e-6f)
+                }
+            }
+        }
+    }
+
     private fun inverseHlg(code: Double): Double = if (code <= 0.5) {
         code * code / 3.0
     } else {

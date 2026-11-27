@@ -22,6 +22,10 @@ object HuaweiVendorControls {
     const val COLOR_MODE_KEY = "com.huawei.capture.metadata.colorMode"
     const val COLOR_MODE_SMOOTH = 2
 
+    fun isHuaweiDevice(): Boolean =
+        Build.MANUFACTURER.equals("HUAWEI", ignoreCase = true) ||
+            Build.BRAND.equals("HUAWEI", ignoreCase = true)
+
     fun parseKelvinRange(raw: IntArray?): IntRange? {
         if (raw == null || raw.size < 2) return null
         val minK = raw[0]

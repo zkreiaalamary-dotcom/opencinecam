@@ -39,9 +39,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -356,7 +358,8 @@ internal fun GalleryBadge(text: String, modifier: Modifier = Modifier, accent: B
         .background(MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.82f), RoundedCornerShape(6.dp))
         .padding(horizontal = 6.dp, vertical = 2.dp),
         color = if (accent) SettingsAccent else MaterialTheme.colorScheme.onSurface, fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace,
+        style = TextStyle(textDirection = TextDirection.Content), maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 /** The proxy glyph with a tick once the proxy exists, or an ellipsis while it is queued or being made. */

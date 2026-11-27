@@ -52,6 +52,17 @@ internal fun PlaybackObservation.withPlayerGeometry(width: Int, height: Int): Pl
     if (width > 0 && height > 0 && (phase == PlaybackPhase.PLAYING || frameIndex == null && bitmap == null))
         copy(videoWidth = width, videoHeight = height) else this
 
+/**
+ * Direct surface review is required for 10-bit OCLog2 and HDR (HLG/PQ) clips on API < 33 where
+ * CPU P010 readback (`ImageFormat.YCBCR_P010`) is unavailable.
+ */
+internal fun shouldDefaultNativeSurfaceFrames(
+    settingNative: Boolean,
+    isOcLogClip: Boolean,
+    sdkInt: Int = android.os.Build.VERSION.SDK_INT,
+    isHdrClip: Boolean = false,
+): Boolean = settingNative || ((isOcLogClip || isHdrClip) && sdkInt < android.os.Build.VERSION_CODES.TIRAMISU)
+
 /** Main-thread player; one serial, interruptible readonly decoder. Continuous A/V time is
  * a player estimate. Only a decoded buffer's PTS is reported as a verified frame position. */
 internal class MediaPlaybackSession(
@@ -81,6 +92,7 @@ internal class MediaPlaybackSession(
     private var seekTicket = 0L
     private var hasSurface = false
     private var outputSurface: Surface? = null
+    @Volatile private var surfaceRenderConfirmation: SurfaceFrameRenderConfirmation? = null
     private var suspended = false
     private var pendingFrameIndex = 0
     private var seekToPlay = false
@@ -283,7 +295,7 @@ internal class MediaPlaybackSession(
             publish(state.copy(phase = PlaybackPhase.SEEKING, positionUs = state.timeline!!.timestampsUs[index], bitmap = null, frameIndex = null, renderedAtNs = null))
             if (surface == null || suspended) return
             read {
-                val frame = checkNotNull(frames).frameToSurface(index, surface);
+                val frame = checkNotNull(frames).frameToSurface(index, surface, surfaceRenderConfirmation);
                 { if (outputSurface === surface && surface.isValid) publish(state.copy(
                     phase = if (ended) PlaybackPhase.ENDED else PlaybackPhase.PAUSED,
                     videoWidth = frame.displayWidth, videoHeight = frame.displayHeight,
@@ -300,6 +312,10 @@ internal class MediaPlaybackSession(
                             frameIndex = frame.index, positionUs = frame.presentationTimeUs, bitmap = frame.bitmap, frameColor = frame.color, hdrPreview = frame.hdrPreview)) }
         }
     }
+    fun setSurfaceRenderConfirmation(confirmation: SurfaceFrameRenderConfirmation?) {
+        surfaceRenderConfirmation = confirmation
+    }
+
     override fun setSurface(surface: Surface?) {
         if (closed || photo) return
         if (outputSurface === surface) return

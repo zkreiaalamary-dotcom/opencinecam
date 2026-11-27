@@ -311,13 +311,47 @@ internal fun analyzeRgbaFrame(
  * unmirrored. SurfaceTexture always appends a vertical flip, so an unmirrored frame has a negative
  * 2×2 determinant; a positive one carries the producer's flip, removed here by sampling u as 1 − u.
  */
-internal fun unmirrorSurfaceTextureMatrix(matrix: FloatArray) {
+fun unmirrorSurfaceTextureMatrix(matrix: FloatArray) {
     if (matrix[0] * matrix[5] - matrix[4] * matrix[1] <= 0f) return
     for (row in 0 until 4) {
         matrix[12 + row] += matrix[row]
         matrix[row] = -matrix[row]
     }
 }
+
+/**
+ * Column-major 4x4 texture transform matching SurfaceTexture.getTransformMatrix() for zero-copy
+ * ImageReader/HardwareBuffer frames: applies the sensor's clockwise rotation [sensorOrientationDegrees]
+ * plus ImageReader's top-down Y flip (det = -1, identical to an unmirrored SurfaceTexture).
+ */
+fun imageReaderTextureMatrix(sensorOrientationDegrees: Int): FloatArray =
+    when (((sensorOrientationDegrees % 360) + 360) % 360) {
+        0 -> floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f,
+        )
+        90 -> floatArrayOf(
+            0f, -1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 1f, 0f, 1f,
+        )
+        180 -> floatArrayOf(
+            -1f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 0f, 0f, 1f,
+        )
+        270 -> floatArrayOf(
+            0f, 1f, 0f, 0f,
+            1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 0f, 0f, 1f,
+        )
+        else -> throw IllegalArgumentException("Sensor orientation must be a multiple of 90 degrees: $sensorOrientationDegrees")
+    }
 
 /** Pure preview geometry shared by the GL renderer and local unit tests. */
 internal object OpenCineLogPreviewGeometryCalculator {
@@ -465,6 +499,7 @@ class OpenCineLogGpuPipeline(
     }.getOrDefault(false)
     private val zeroCopyActive: Boolean =
         useZeroCopyVideoImageReader && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && EglHardwareBufferBridge.loaded
+    private val zeroCopyTextureMatrix: FloatArray = imageReaderTextureMatrix(sensorOrientationDegrees)
     @Volatile private var researchObserver: Camera2ResearchObserver? = null
 
     fun attachResearchObserver(observer: Camera2ResearchObserver?) {
@@ -1544,7 +1579,7 @@ class OpenCineLogGpuPipeline(
             check(bindErr == 0) { "glEGLImageTargetTexture2DOES failed with 0x${bindErr.toString(16)}" }
             frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.LATCH)
             val sourceReceivedAtMs = android.os.SystemClock.elapsedRealtime()
-            IMAGE_READER_Y_FLIP_MATRIX.copyInto(textureMatrix)
+            zeroCopyTextureMatrix.copyInto(textureMatrix)
             if (frontFacing) unmirrorSurfaceTextureMatrix(textureMatrix)
             val frameDataSpace = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) image.dataSpace else null
             renderLatchedFrame(image.timestamp, frameDataSpace, sourceReceivedAtMs)
@@ -2881,12 +2916,6 @@ class OpenCineLogGpuPipeline(
         private const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
         private const val EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
         private const val EGL_CONTEXT_PRIORITY_HIGH_IMG = 0x3101
-        private val IMAGE_READER_Y_FLIP_MATRIX = floatArrayOf(
-            1f, 0f, 0f, 0f,
-            0f, -1f, 0f, 0f,
-            0f, 0f, 1f, 0f,
-            0f, 1f, 0f, 1f,
-        )
 
         private fun createZeroCopyImageReader(width: Int, height: Int): ImageReader =
             ImageReader.newInstance(

@@ -936,6 +936,8 @@ class Camera2PreviewEngine(
     @Volatile internal var recorderOverGpuPreview = false
     private var cameraOpening = false
     private var closingCamera: CameraDevice? = null
+    private var lastCameraClosedElapsedMs = 0L
+    private var reopenSettleScheduled = false
     internal val retiringPipelines = mutableSetOf<OpenCineLogGpuPipeline>()
     internal val initializationRetirements = mutableSetOf<CompletableFuture<Unit>>()
     private var ownerLease: CaptureOwnerAdmission.Lease? = null
@@ -1455,7 +1457,10 @@ class Camera2PreviewEngine(
                         }
 
                         override fun onClosed(device: CameraDevice) {
-                            if (closingCamera === device) closingCamera = null
+                            if (closingCamera === device) {
+                                closingCamera = null
+                                lastCameraClosedElapsedMs = SystemClock.elapsedRealtime()
+                            }
                             runPendingPreviewStart()
                             finishCloseIfIdle()
                         }
@@ -1653,6 +1658,23 @@ class Camera2PreviewEngine(
             warmOpen?.takeIf { !it.started }?.let(::openWarm)
             return
         }
+        if (HuaweiVendorControls.isHuaweiDevice() && lastCameraClosedElapsedMs > 0L) {
+            val remainingMs = HUAWEI_REOPEN_SETTLE_MS - (SystemClock.elapsedRealtime() - lastCameraClosedElapsedMs)
+            if (remainingMs > 0L) {
+                if (!reopenSettleScheduled) {
+                    reopenSettleScheduled = true
+                    imageHandler.postDelayed({
+                        runCatching {
+                            cameraExecutor.execute {
+                                reopenSettleScheduled = false
+                                runPendingPreviewStart()
+                            }
+                        }
+                    }, remainingMs)
+                }
+                return
+            }
+        }
         pendingPreviewStart = null
         action.run()
     }
@@ -1702,7 +1724,10 @@ class Camera2PreviewEngine(
 
         override fun onClosed(device: CameraDevice) {
             delegate?.let { return it.onClosed(device) }
-            if (closingCamera === device) closingCamera = null
+            if (closingCamera === device) {
+                closingCamera = null
+                lastCameraClosedElapsedMs = SystemClock.elapsedRealtime()
+            }
             runPendingPreviewStart()
             finishCloseIfIdle()
         }
@@ -3438,6 +3463,7 @@ class Camera2PreviewEngine(
         /** An early open nobody adopts within this long is closed, so it never holds the camera. */
         const val WARM_OPEN_UNCLAIMED_MS = 30_000L
         const val FOCUS_PULL_TICK_MS = 33L
+        private const val HUAWEI_REOPEN_SETTLE_MS = 150L
         /** The standard stream use cases the camera advertises, or empty without API 33 and the STREAM_USE_CASE capability. */
         internal fun advertisedStreamUseCases(characteristics: CameraCharacteristics, capabilities: IntArray): Set<Long> {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || StreamUseCase.CAPABILITY !in capabilities) return emptySet()
