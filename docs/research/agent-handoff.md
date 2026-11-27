@@ -36,6 +36,19 @@
 
 ---
 
+## Wave 1–3 Breakthroughs & Production 4K60 OCLog2 / CUVA HDR Verification (`2026-11-27`)
+
+All blocking bottlenecks between Huawei Pura 80 Pro (`LMR-LX9`, Kirin 9020, API 31) and **sustained `4K60` / `4K30` `OCLog2` `HEVC Main 10` with CUVA HDR Vivid (`0x324`)** were solved and verified live on `53K0226129002419`:
+
+1. **Zero-Copy `ImageReader(PRIVATE, USAGE_GPU_SAMPLED_IMAGE | USAGE_VIDEO_ENCODE)` (`Probe 1`, `Probe 6`, `Probe 8`):** Replaced `4K60 SurfaceTexture` input (`48.83 fps / 25 gaps` in `1A`) with `ImageReader(..., HARDWARE_BUFFER | USAGE_GPU_SAMPLED_IMAGE | USAGE_VIDEO_ENCODE)` (`1C`: **`59.36 fps / 0 gaps`**), bound directly to Maleoon 920 `samplerExternalOES` via new native JNI/EGL extension bridge (`occ_egl_hwbuffer_jni.cpp` / `EglHardwareBufferBridge.kt`, `extMask=15`, `IMAGE_READER_Y_FLIP_MATRIX`) plus `EGL_CONTEXT_PRIORITY_HIGH_IMG (0x3101)` (`Probe 3`: `p95` `19.66 -> 16.32 ms`).
+2. **HiSilicon `Main10 L6.2` + CUVA HDR Vivid (`0x324`) + `HwVideoRecordingPre4K60En` (`Probe 2`, `Probe 6`, `Probe 8`):** Production `OpenCineLogGpuPipeline` enables `hisiliconMain10Workaround` (`egl8` + `L6.2` `16777216`), `Camera2SessionGraphs` injects `cuvaStateVideoMode = ByteArray[1]` (`0x324`), and `Camera2Descriptors` advertises `235` `HLG10_BT2020` CUVA profiles including `3840x2160@60` (`has4k60CuvaProfile=true`, `has4k60VideoProfile=true`, `hasUntestedOpenGate4k60=false`).
+3. **Live Sustained Production Verification (`Probe 8`, `OK (1 test)`, `41.508 s`, `21 -> 23 °C`):**
+   - `prod_4k60_oclog2_15s.mp4` (`187,090,075 B`): `camCb=930 f / 59.940 fps (0 gaps)`, `898` encoded frames / `59.787 fps`, `99.66 Mbps`, `Main 10 L153`, `containerVuiTransfer=2`, 10-bit `Y=[78..876]`, `755/1024` distinct, `lsbNz=0.751`, `clipLo=0, clipHi=0`, visually verified upright.
+   - `prod_4k30_oclog2_5s.mp4` (`35,433,952 B`): `29.990 fps`, `151` frames, `56.30 Mbps`, `Main 10 L150`, `0` PTS gaps.
+4. **Hidden `RAW_SENSOR (32)` & `0x7F000011 = P010_MSB_16LE` (`Probes 4, 5, 7`):** Camera `"0"` streams `4000x3000 RAW_SENSOR` at `29.991 / 24.006 fps (0 gaps)` and `8192x6144` when paired with `720p YUV`; Camera `"2"` delivers `8000x6016 RAW_SENSOR`; `OMX.hisi` `0x7F000011` accepts `P010_MSB_16LE`.
+
+---
+
 ## Immediate Next Actions for Following Agent
 
 1. *(Completed on device `2026-11-27` — `OpenCineCam-research (2).zip`, Run `082c0332` `47/47` under Performance Mode ON + cooler ON)* Confirmed `0` thermal pauses (`30–32 °C, status<=1`), Direct `4K60` (`720p`/`360p` ST & single-target `30 s`) at **`59.92–59.97 fps, 0 drops`**, **CUVA HDR Vivid `cuvaStateVideoMode=ByteArray[1]` (`hwBufferFormat 34 -> 804 / 0x324`, `0.0%` highlight clip)**, Kirin inverted gamma (`y ~ x^gamma`, making `gamma_2_0` / `gamma_2_2` the unclipped `4K30 OCLog2 Main10` winners), `4.2x` `0x7F000011` ByteBuffer encode (`84,556 B`, `spsBitDepthLuma=10`), and **REFUTED `H-11`** (`009` encoder-idle `4K60 previewOnly`: `CAM_CB=240` vs `SurfaceTexture` GL=`191 / ~48 fps` despite `1.852 ms` GL time).

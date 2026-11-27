@@ -48,8 +48,9 @@ Grounded in verified findings from `تجربه1` (Runs 0–2) and `تجربه2` 
    - Fix `PictureProfile.FLAT` linear-domain scaling mismatch vs ISP `TONEMAP_CURVE` **and/or** adopt `TONEMAP_MODE_GAMMA_VALUE (3)` + `COLOR_CORRECTION_MODE_TRANSFORM_MATRIX (0)` when verified unclipped on locked-AE chart tests.
    - Maintain strict provenance disclosure: label SDR-derived OCLog2 honestly (`POST_ISP_8BIT_SDR_LOG`) unless true `>8-bit` camera buffer + non-clipped dynamic range gain is proven!
 
-### Phase 4 — Advanced Exploration (Vendor CUVA HDR Vivid & HFR)
-- Probe `com.huawei.capture.metadata.cuvaStateVideoMode` and `1080p120` explicit-level OCLog2 after Core 4K30/4K60 and ISP controls are solid.
+### Phase 4 — Advanced Exploration (Vendor CUVA HDR Vivid & HFR) — **Shipped & Verified Live (`2026-11-27`)**
+- Shipped CUVA HDR Vivid (`com.huawei.capture.metadata.cuvaStateVideoMode = ByteArray[1]`, `hwBufferFormat=0x324`), zero-copy `ImageReader(PRIVATE, GPU|VIDEO_ENCODE) -> libocc_egl_hwbuffer.so` (`Probe 1, 6, 8`), `hisiliconMain10Workaround`, `EGL_CONTEXT_PRIORITY_HIGH_IMG`, and `HwVideoRecordingPre4K60En` `<=3840x2160` descriptor override (`Probe 8`: `235` LOG profiles, `15 s` 4K60 `59.787 fps / 99.66 Mbps / Main10 L153` & `5 s` 4K30 `29.990 fps`, upright frame verified).
+- Hidden `RAW_SENSOR (32)` streaming (`4000x3000 @ 29.991 / 24.006 fps`, `0 gaps`, `Probe 4 & 7`) and `0x7F000011 = P010_MSB_16LE` (`Probe 5`) are proven and ready as next-phase feature candidates.
 
 ---
 

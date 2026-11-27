@@ -134,3 +134,18 @@ All 24 decoded MP4s report `yuv420p`, `color_range = tv` (Limited), `color_space
 | `R2-013`, `R3-013` | `CODEC_LEVEL_PAIR` | `MISMATCH` | `OMX.hisi.video.encoder.hevc` Main 4K30: `level=null` -> `configure` `0x80001001`; `level=65536 (L5.1)` -> `start` OK (`admitted=true`). Reproduces across R2 and R3 (`H-01` proven, though `knowledge.json` missed it via event-name bug). |
 | `R2-020`, `R3-019`, `R3-022` | `AVC previewOnly=true` | `OBSERVED` | 1080p60 (`R2-020`, `R3-022`) & 1080p30 (`R3-019`) preview-only Camera2 baselines completed without error. |
 | `R2-024` | `AVC 4K60` (unlisted) | `MISMATCH` | Sensor reported `59.925 fps` (`10` frames, `[60, 60]`), rejected because `Camera2PreviewEngine` substituted `1920x1080` for unlisted `3840x2160@60`. |
+
+---
+
+## 6. Stage G Live Hardware Probes (`Probes 1–8`, `53K0226129002419`, `2026-11-27`)
+
+| Wave / Probe | Artifact & Scope | Outcome / Key Numbers |
+|---|---|---|
+| Wave 1 `Probe 1` | `probe1_4k60_input.json` | `1A` ST `48.83 fps (25 gaps)` & `1B` `GPU_SAMPLED` `49.22 fps (26 gaps)` vs **`1C` `ImageReader(PRIVATE, GPU\|VIDEO_ENCODE)`: `camCb=59.36 fps (0 gaps)`, `consumer=158 frames / 59.36 fps (0 gaps, max 16.907 ms)`** (`30 -> 31 °C`) |
+| Wave 1 `Probe 3` | `probe3_synth_4k60_priority.json` | `EGL_CONTEXT_PRIORITY_HIGH_IMG (0x3101)` verified (`0x3102 -> 0x3101`); `Main10 L6.2 4K` `p95` `19.66 -> 16.32 ms` (`84.40 fps`) |
+| Wave 1 `Probe 4` | `probe4_hidden_raw.json` | Paired `720p YUV`: Camera `"0"` `8192x6144` (`100.66 MB`) & `4000x3000` (`24.19 MB`) `RAW_SENSOR (32)`; Camera `"2"` `8000x6016` (`96.26 MB`) |
+| Wave 2 `Probe 6` | `probe6_zerocopy_4k60_oclog2.json` | **`6C_zerocopy_4k60_oclog2_cuva` (`31,846,362 B`):** `hwFmt=0x324`, `eglCreateOk=191 (0 fail)`, `glErrors=0`, `camCb=59.925 fps (0 gaps)`, `glRendered=59.925 fps (0 gaps)`, `79.93 Mbps`, 10-bit `Y`: `757/1024` distinct, `lsbNz=0.7523`, `clipLo=0, clipHi=0` |
+| Wave 2 `Probe 2` | `probe2_cuva_hdr.json` | `2C1` Direct `4K60 CUVA`: `15,312,784 B`, `59.920 fps (0 gaps, 158 frames, Main10 L153)`; `2D` `EGL10` WindowSurface confirmed `3,429 B / 0 pkts` |
+| Wave 2 `Probe 5` | `probe5_bb10.json` | `0x7F000011` (`bb_7f11_p010_msb.mp4`, `7,973 B`, `15` samples, `spsBitDepthLuma=10`) confirmed `P010_MSB_16LE` |
+| Wave 2 `Probe 7` | `probe7_raw_streaming.json` | Camera `"0"` `4000x3000 RAW_SENSOR`: `29.991 fps (79 frames, 0 gaps)` & `24.006 fps (64 frames, 0 gaps)` |
+| **Wave 3 `Probe 8`** | `probe8_production_verification.json` | **`OK (1 test)` (`41.508 s`, `21 -> 23 °C`):** `235` LOG profiles (`4K60 CUVA=true`, `4K30 CUVA=true`, `4K60 video=true`); `prod_4k60_oclog2_15s.mp4` (`187,090,075 B`, `camCb=930 f / 59.940 fps (0 gaps)`, `898` pkts, `59.787 fps`, `99.66 Mbps`, `Main10 L153`, `containerVuiTransfer=2`, `Y10=[78..876]`, `755/1024` distinct, `clip=0`, upright verified); `prod_4k30_oclog2_5s.mp4` (`35,433,952 B`, `29.990 fps`, `151` pkts, `0` gaps) |

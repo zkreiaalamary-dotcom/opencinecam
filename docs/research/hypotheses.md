@@ -67,3 +67,11 @@ Note critical comparison: **`003 GPU_HEVC_4K30` uses the exact same `OpenCineLog
 
 ### Failure F: `009` Arm 5 Crashed `cameraserver` -> Blinded `010` & Crashed `011`
 - **Mechanism (PROVEN):** Submitting `CaptureRequest.TONEMAP_MODE = TONEMAP_MODE_PRESET_CURVE (4)` with `TONEMAP_PRESET_CURVE_SRGB` on LMR-LX9 (where `TONEMAP_AVAILABLE_TONE_MAP_MODES = [0, 1, 2]`) killed the CameraDevice/cameraserver session (`CameraDevice was already closed`). Immediately afterward, `010 SOURCE_FORMAT_PROBE` looped over `allIds`, caught `getCameraCharacteristics` failure silently (`?: continue`), and logged `cameras: []`, returning `OBSERVED`! Seconds later, `011` threw `Unable to retrieve camera characteristics for unknown device 0: No such file or directory (-2)` before `cameraserver` finished recovering by `012` (`~3–5 s` later).
+
+---
+
+## 3. Stage G Wave 1–3 Resolution Summary (`2026-11-27`)
+
+- **`H-05` & `H-11` Resolved via Zero-Copy `ImageReader(PRIVATE, GPU|VIDEO_ENCODE)` (`Probe 1`, `Probe 6`, `Probe 8`):** Camera2 -> `SurfaceTexture` capped at `48.83 fps` (`1A`), while `ImageReader(PRIVATE, USAGE_GPU_SAMPLED_IMAGE | USAGE_VIDEO_ENCODE)` (`1C`) delivered `59.36 fps (0 gaps)`. Production `OpenCineLogGpuPipeline` (`libocc_egl_hwbuffer.so`) sustained `930` camera callbacks (`59.940 fps, 0 gaps`) and `898` encoded 4K60 Main10 L153 OCLog2 CUVA frames (`59.787 fps`, `99.66 Mbps`) over `15 s`.
+- **`H-08` Partially Overturned (`Probe 4`, `Probe 7`):** Hidden `RAW_SENSOR (32)` (`8192x6144` & `4000x3000` on Camera `"0"`, `8000x6016` on Camera `"2"`) is admitted and streams at `29.991 / 24.006 fps (0 gaps)` when paired with `1280x720 YUV`, despite omission from `SCALER_STREAM_CONFIGURATION_MAP`.
+- **`H-12` Confirmed (`Probe 5`):** `OMX.hisi.video.encoder.hevc` `0x7F000011` expects `P010_MSB_16LE` (`spsBitDepthLuma=10`).
