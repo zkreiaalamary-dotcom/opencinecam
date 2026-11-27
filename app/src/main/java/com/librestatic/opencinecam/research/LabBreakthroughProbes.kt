@@ -100,7 +100,7 @@ internal object LabBreakthroughProbes {
             ImageReader.newInstance(width, height, format, maxImages, usage)
     }
 
-    private fun createUsageImageReader(width: Int, height: Int, format: Int, maxImages: Int, usage: Long?): ImageReader =
+    internal fun createUsageImageReader(width: Int, height: Int, format: Int, maxImages: Int, usage: Long?): ImageReader =
         if (usage != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             Api29ImageReader.create(width, height, format, maxImages, usage)
         } else {
@@ -114,7 +114,7 @@ internal object LabBreakthroughProbes {
         return if (tenths > -1000) tenths / 10.0 else null
     }
 
-    private fun ensureCoolOrWait(context: Context, checkBudget: () -> Unit, maxWaitMs: Long = 90_000L): Double? {
+    internal fun ensureCoolOrWait(context: Context, checkBudget: () -> Unit, maxWaitMs: Long = 90_000L): Double? {
         val deadline = System.currentTimeMillis() + maxWaitMs
         var temp = batteryTempC(context)
         while (temp != null && temp >= 40.0 && System.currentTimeMillis() < deadline) {
@@ -129,7 +129,7 @@ internal object LabBreakthroughProbes {
         return temp
     }
 
-    private fun saveProbeJson(outDir: File, fileName: String, payload: JSONObject): JSONObject {
+    internal fun saveProbeJson(outDir: File, fileName: String, payload: JSONObject): JSONObject {
         runCatching {
             outDir.mkdirs()
             File(outDir, fileName).writeText(payload.toString(2), Charsets.UTF_8)
@@ -137,7 +137,7 @@ internal object LabBreakthroughProbes {
         return payload
     }
 
-    private fun selectHevcEncoderName(): String {
+    internal fun selectHevcEncoderName(): String {
         val infos = runCatching { MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos }.getOrNull().orEmpty()
         infos.firstOrNull { it.isEncoder && !it.isAlias && it.name == HISI_HEVC }?.let { return it.name }
         return infos.firstOrNull {
@@ -146,20 +146,20 @@ internal object LabBreakthroughProbes {
         }?.name ?: HISI_HEVC
     }
 
-    private fun findVendorRequestKey(caps: CameraCharacteristics, substr: String): CaptureRequest.Key<*>? =
+    internal fun findVendorRequestKey(caps: CameraCharacteristics, substr: String): CaptureRequest.Key<*>? =
         runCatching { caps.availableCaptureRequestKeys }.getOrNull().orEmpty()
             .firstOrNull { it.name.contains(substr, ignoreCase = true) }
 
-    private fun findVendorResultKey(caps: CameraCharacteristics, substr: String): CaptureResult.Key<*>? =
+    internal fun findVendorResultKey(caps: CameraCharacteristics, substr: String): CaptureResult.Key<*>? =
         runCatching { caps.availableCaptureResultKeys }.getOrNull().orEmpty()
             .firstOrNull { it.name.contains(substr, ignoreCase = true) }
 
-    private fun vendorKeyTypeHint(key: CaptureRequest.Key<*>?): String = runCatching {
+    internal fun vendorKeyTypeHint(key: CaptureRequest.Key<*>?): String = runCatching {
         val nativeKey = key?.javaClass?.getMethod("getNativeKey")?.invoke(key)
         nativeKey?.javaClass?.getMethod("getType")?.invoke(nativeKey)?.toString()
     }.getOrNull() ?: "unknown"
 
-    private fun readResultKeyValue(res: TotalCaptureResult, key: CaptureResult.Key<*>?): String? {
+    internal fun readResultKeyValue(res: TotalCaptureResult, key: CaptureResult.Key<*>?): String? {
         if (key == null) return null
         val value = runCatching {
             @Suppress("UNCHECKED_CAST")
@@ -172,7 +172,7 @@ internal object LabBreakthroughProbes {
         }
     }
 
-    private data class TimestampMetrics(
+    internal data class TimestampMetrics(
         val frames: Int,
         val fps: Double,
         val gaps: Int,
@@ -180,7 +180,7 @@ internal object LabBreakthroughProbes {
         val maxDeltaMs: Double,
     )
 
-    private fun computeTimestampMetrics(timestampsNs: List<Long>, gapThresholdNs: Long = GAP_THRESHOLD_60FPS_NS): TimestampMetrics {
+    internal fun computeTimestampMetrics(timestampsNs: List<Long>, gapThresholdNs: Long = GAP_THRESHOLD_60FPS_NS): TimestampMetrics {
         if (timestampsNs.size < 2) {
             return TimestampMetrics(timestampsNs.size, 0.0, 0, 0.0, 0.0)
         }
@@ -205,7 +205,7 @@ internal object LabBreakthroughProbes {
         )
     }
 
-    private fun TimestampMetrics.toJson(): JSONObject = json(
+    internal fun TimestampMetrics.toJson(): JSONObject = json(
         "frames" to frames,
         "fps" to fps,
         "gaps" to gaps,
@@ -589,7 +589,7 @@ internal object LabBreakthroughProbes {
     }
 
     @SuppressLint("MissingPermission")
-    private fun warmupAndLockExposure(context: Context): Pair<Long, Int>? {
+    internal fun warmupAndLockExposure(context: Context): Pair<Long, Int>? {
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
         lease.ready().get(8, TimeUnit.SECONDS)
         val manager = context.getSystemService(CameraManager::class.java)
@@ -1125,7 +1125,7 @@ internal object LabBreakthroughProbes {
         }
     }
 
-    private fun inspectWrittenMp4(file: File): JSONObject {
+    internal fun inspectWrittenMp4(file: File): JSONObject {
         if (!file.isFile || file.length() < 64L) return json("valid" to false, "bytes" to file.length())
         val extractor = MediaExtractor()
         return try {
@@ -2257,7 +2257,7 @@ internal object LabBreakthroughProbes {
         }
     }
 
-    private fun compileGlProgram(vsh: String, fsh: String): Int {
+    internal fun compileGlProgram(vsh: String, fsh: String): Int {
         fun compile(type: Int, src: String): Int {
             val s = GLES20.glCreateShader(type)
             GLES20.glShaderSource(s, src)

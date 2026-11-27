@@ -44,5 +44,5 @@ target_link_options(occ_aaudio PRIVATE -Wl,--gc-sections -Wl,-z,max-page-size=16
 add_library(occ_egl_hwbuffer SHARED occ_egl_hwbuffer_jni.cpp)
 target_compile_options(occ_egl_hwbuffer PRIVATE
   -O3 -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fvisibility=hidden)
-target_link_libraries(occ_egl_hwbuffer PRIVATE android EGL GLESv3 log)
+target_link_libraries(occ_egl_hwbuffer PRIVATE android EGL GLESv3 log dl)
 target_link_options(occ_egl_hwbuffer PRIVATE -Wl,--gc-sections -Wl,-z,max-page-size=16384)
