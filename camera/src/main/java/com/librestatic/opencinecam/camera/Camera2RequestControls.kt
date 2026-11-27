@@ -79,6 +79,14 @@ internal fun Camera2PreviewEngine.reportRecordingWhiteBalance(request: CaptureRe
 }
 
 internal fun Camera2PreviewEngine.fixedRecordingWhiteBalanceMatches(held: WhiteBalanceSelection?, request: CaptureRequest, result: TotalCaptureResult): Boolean {
+    val descriptor = activeDescriptor
+    if (held is WhiteBalanceSelection.Kelvin && descriptor?.huaweiVendorKelvinWb == true && Build.VERSION.SDK_INT < 36) {
+        if (request.get(CaptureRequest.CONTROL_AWB_MODE) != CaptureRequest.CONTROL_AWB_MODE_AUTO ||
+            result.get(android.hardware.camera2.CaptureResult.CONTROL_AWB_MODE) != CaptureRequest.CONTROL_AWB_MODE_AUTO
+        ) return false
+        return HuaweiVendorControls.requestHasKelvin(request, held.kelvin) &&
+            HuaweiVendorControls.resultHasKelvinOrUnreported(result, held.kelvin)
+    }
     val mode = when (held) {
         is WhiteBalanceSelection.Preset -> held.awbMode
         is WhiteBalanceSelection.Kelvin -> CaptureRequest.CONTROL_AWB_MODE_OFF
@@ -89,7 +97,7 @@ internal fun Camera2PreviewEngine.fixedRecordingWhiteBalanceMatches(held: WhiteB
         if (Build.VERSION.SDK_INT < 36) return false
         if (request.get(CaptureRequest.COLOR_CORRECTION_COLOR_TEMPERATURE) != held.kelvin ||
             result.get(android.hardware.camera2.CaptureResult.COLOR_CORRECTION_COLOR_TEMPERATURE) != held.kelvin) return false
-        if (activeDescriptor?.tintSupported == true && (request.get(CaptureRequest.COLOR_CORRECTION_COLOR_TINT) != held.tint ||
+        if (descriptor?.tintSupported == true && (request.get(CaptureRequest.COLOR_CORRECTION_COLOR_TINT) != held.tint ||
                 result.get(android.hardware.camera2.CaptureResult.COLOR_CORRECTION_COLOR_TINT) != held.tint)) return false
     }
     return true
@@ -280,6 +288,9 @@ internal fun Camera2PreviewEngine.applyManualControls(
         }
     }
     val wbDescriptor = activeDescriptor
+    val wbCharacteristics = if (wbDescriptor?.huaweiVendorKelvinWb == true || wbDescriptor?.huaweiSmoothColorModeSupported == true) {
+        runCatching { manager.getCameraCharacteristics(wbDescriptor.cameraId) }.getOrNull()
+    } else null
     val effectiveWb = (heldRecordingWb ?: requestedWhiteBalance).adaptTo(
         wbDescriptor?.kelvinRange.takeUnless { isHighSpeedSession() },
         wbDescriptor?.tintSupported == true,
@@ -288,6 +299,9 @@ internal fun Camera2PreviewEngine.applyManualControls(
     when (val wb = effectiveWb) {
         is WhiteBalanceSelection.Auto -> {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            if (wbDescriptor?.huaweiVendorKelvinWb == true && Build.VERSION.SDK_INT < 36) {
+                HuaweiVendorControls.clearKelvin(builder, wbCharacteristics, wbDescriptor.cameraId)
+            }
             if (Build.VERSION.SDK_INT >= 36) {
                 builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 builder.set(CaptureRequest.COLOR_CORRECTION_COLOR_TEMPERATURE, null)
@@ -295,17 +309,26 @@ internal fun Camera2PreviewEngine.applyManualControls(
             }
         }
         is WhiteBalanceSelection.Kelvin -> {
-            builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
+            val range = wbDescriptor?.kelvinRange
+            val clamped = if (range != null) wb.kelvin.coerceIn(range.first, range.last) else wb.kelvin
             if (Build.VERSION.SDK_INT >= 36) {
-                val range = activeDescriptor?.kelvinRange
-                val clamped = if (range != null) wb.kelvin.coerceIn(range.first, range.last) else wb.kelvin
+                builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
                 builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_CCT)
                 builder.set(CaptureRequest.COLOR_CORRECTION_COLOR_TEMPERATURE, clamped)
                 if (wbDescriptor?.tintSupported == true) builder.set(CaptureRequest.COLOR_CORRECTION_COLOR_TINT, wb.tint)
+            } else if (wbDescriptor?.huaweiVendorKelvinWb == true) {
+                // Kirin HAL outputs black frames under AWB_MODE_OFF; keep AUTO and drive vendor sensorWbValue.
+                builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+                HuaweiVendorControls.applyKelvin(builder, wbCharacteristics, wbDescriptor.cameraId, clamped)
+            } else {
+                builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
             }
         }
         is WhiteBalanceSelection.Preset -> {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, wb.awbMode)
+            if (wbDescriptor?.huaweiVendorKelvinWb == true && Build.VERSION.SDK_INT < 36) {
+                HuaweiVendorControls.clearKelvin(builder, wbCharacteristics, wbDescriptor.cameraId)
+            }
             if (Build.VERSION.SDK_INT >= 36) {
                 builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
                 builder.set(CaptureRequest.COLOR_CORRECTION_COLOR_TEMPERATURE, null)
@@ -341,13 +364,23 @@ internal fun Camera2PreviewEngine.applyImageProcessing(builder: CaptureRequest.B
 }
 
 /**
+ * Prevents restoring [CaptureRequest.TONEMAP_MODE_PRESET_CURVE] from stale/device templates:
+ * on Huawei/Kirin HAL (`CAMERA_TONEMAP_PRESET_CURVE` 0x45f), `elemSize` mismatch (4 vs 1)
+ * aborts `libcamera_daemon.so`. Never emit `PRESET_CURVE` when restoring defaults.
+ */
+internal fun sanitizeRestoredToneMapMode(mode: Int?): Int? =
+    if (mode == CaptureRequest.TONEMAP_MODE_PRESET_CURVE) CaptureRequest.TONEMAP_MODE_FAST else mode
+
+/**
  * Picture profile as an ISP contrast curve. STANDARD, an ineligible graph or a camera without
  * the keys restores the template's tone mapping, captured once per builder like the other
  * processing defaults, so switching back never leaves a stale curve.
  */
 internal fun Camera2PreviewEngine.applyPictureProfile(builder: CaptureRequest.Builder, caps: ImageProcessingCapabilities) {
     if (!caps.supportsPictureProfiles) return
-    val defaults = toneMapDefaults.getOrPut(builder) { builder.get(CaptureRequest.TONEMAP_MODE) to builder.get(CaptureRequest.TONEMAP_CURVE) }
+    val defaults = toneMapDefaults.getOrPut(builder) {
+        sanitizeRestoredToneMapMode(builder.get(CaptureRequest.TONEMAP_MODE)) to builder.get(CaptureRequest.TONEMAP_CURVE)
+    }
     val context = ToneProfileContext(
         logOrHlg = logPreviewEnabled || activeLogProfile != null,
         constrainedHfr = isHighSpeedSession(),
@@ -355,7 +388,7 @@ internal fun Camera2PreviewEngine.applyPictureProfile(builder: CaptureRequest.Bu
     val points = imageProcessing.pictureProfile.resolveCurve(caps, context)
     try {
         if (points == null) {
-            builder.set(CaptureRequest.TONEMAP_MODE, defaults.first)
+            builder.set(CaptureRequest.TONEMAP_MODE, sanitizeRestoredToneMapMode(defaults.first))
             builder.set(CaptureRequest.TONEMAP_CURVE, defaults.second)
         } else {
             builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
@@ -370,7 +403,7 @@ internal fun Camera2PreviewEngine.applyPictureProfile(builder: CaptureRequest.Bu
 internal fun Camera2PreviewEngine.restoreToneMapDefaults(builder: CaptureRequest.Builder) {
     val defaults = toneMapDefaults[builder] ?: return
     runCatching {
-        builder.set(CaptureRequest.TONEMAP_MODE, defaults.first)
+        builder.set(CaptureRequest.TONEMAP_MODE, sanitizeRestoredToneMapMode(defaults.first))
         builder.set(CaptureRequest.TONEMAP_CURVE, defaults.second)
     }
 }
@@ -471,10 +504,30 @@ internal fun Camera2PreviewEngine.applyTargetFps(builder: CaptureRequest.Builder
         }
         return
     }
-    descriptor.targetFpsRanges
-        .firstOrNull { it.lower == requestedTargetFps && it.upper == requestedTargetFps }
+    val huaweiBack60Fallback = descriptor.lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+        requestedTargetFps in 31..60 &&
+        requestedTargetFps in descriptor.availableFixedFps &&
+        descriptor.logProfiles.any { it.huaweiCuvaHdr && it.fps == requestedTargetFps }
+    resolveTargetFpsRange(descriptor.targetFpsRanges, requestedTargetFps, huaweiBack60Fallback)
         ?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
 }
+
+internal fun resolveTargetFpsBounds(
+    targetFpsRanges: List<Pair<Int, Int>>,
+    requestedTargetFps: Int,
+    huaweiBack60Fallback: Boolean,
+): Pair<Int, Int>? =
+    targetFpsRanges.firstOrNull { (lower, upper) -> lower == requestedTargetFps && upper == requestedTargetFps }
+        ?: (requestedTargetFps to requestedTargetFps).takeIf { huaweiBack60Fallback && requestedTargetFps in 31..60 }
+
+internal fun resolveTargetFpsRange(
+    targetFpsRanges: List<Range<Int>>,
+    requestedTargetFps: Int,
+    huaweiBack60Fallback: Boolean,
+): Range<Int>? =
+    targetFpsRanges.firstOrNull { it.lower == requestedTargetFps && it.upper == requestedTargetFps }
+        ?: resolveTargetFpsBounds(emptyList(), requestedTargetFps, huaweiBack60Fallback)
+            ?.let { (lower, upper) -> Range(lower, upper) }
 
 internal fun Camera2PreviewEngine.engineEnumKey(key: String): CaptureRequest.Key<Int> = when (key) {
     "CONTROL_MODE" -> CaptureRequest.CONTROL_MODE

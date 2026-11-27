@@ -47,7 +47,7 @@ internal fun Camera2PreviewEngine.preferredHighSpeedPhysicalId(
     return MotorolaHighSpeed.closestFocalPhysicalId(candidates, descriptor.focalLengthsMm.firstOrNull())
 }
 
-internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int, targetHeight: Int): Camera2CameraDescriptor? =
+fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int, targetHeight: Int): Camera2CameraDescriptor? =
     runCatching {
         val characteristics = manager.getCameraCharacteristics(cameraId)
         val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return null
@@ -72,12 +72,20 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
             .getOrNull().orEmpty().ifEmpty { previews }
             .distinctBy { it.width to it.height }
             .filter { candidate -> previews.any { it.width == candidate.width && it.height == candidate.height } }
+        val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_EXTERNAL
         val hasHuawei4k60 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasHuawei4k60VideoRecording(characteristics)
+        val hasHuaweiCuva = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasHuaweiCuvaHdrVideoKey(characteristics)
+        val syntheticBack60 = huaweiBack4k60SyntheticFps(lensFacing, hasHuawei4k60, hasHuaweiCuva, fixedFps)
+        val candidateFps = if (syntheticBack60) (fixedFps + 60).sorted() else fixedFps
         val regularProfiles = videoSizes.flatMap { size ->
-            fixedFps.mapNotNull { fps ->
+            candidateFps.mapNotNull { fps ->
+                val canReachFps = if (fps == 60 && syntheticBack60) {
+                    huawei4k60StreamDurationOverride(size.width, size.height, fps, hasHuawei4k60)
+                } else {
+                    streamCanReachFps(map, size, fps) || huawei4k60StreamDurationOverride(size.width, size.height, fps, hasHuawei4k60)
+                }
                 Camera2VideoProfile(size, fps, false).takeIf {
-                    (streamCanReachFps(map, size, fps) || huawei4k60StreamDurationOverride(size.width, size.height, fps, hasHuawei4k60)) &&
-                        encoderCanReachFps(size, fps)
+                    canReachFps && encoderCanReachFps(size, fps)
                 }
             }
         }
@@ -112,11 +120,18 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
         } else false
         val hasHdr10 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             hlgProfiles?.supportedProfiles?.contains(DynamicRangeProfiles.HDR10) == true
-        val hasHuaweiCuva = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasHuaweiCuvaHdrVideoKey(characteristics)
         val regularLogProfiles = if ((hasHlg10 && hasBt2020Hlg) || hasHuaweiCuva) {
             val huaweiCuvaFallback = !(hasHlg10 && hasBt2020Hlg) && hasHuaweiCuva
             videoSizes.flatMap { size ->
-                fixedFps.mapNotNull { fps ->
+                candidateFps.mapNotNull { fps ->
+                    val zeroCopyPreferred = hasHuawei4k60 && OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(size, fps)
+                    val canReachFps = if (fps == 60 && syntheticBack60) {
+                        huawei4k60StreamDurationOverride(size.width, size.height, fps, zeroCopyPreferred)
+                    } else {
+                        streamCanReachFps(map, size, fps) ||
+                            huawei4k60StreamDurationOverride(size.width, size.height, fps, zeroCopyPreferred) ||
+                            huaweiCuvaUhdStreamDurationOverride(size.width, size.height, fps, huaweiCuvaFallback, zeroCopyPreferred)
+                    }
                     Camera2LogProfile(
                         size = size,
                         fps = fps,
@@ -127,9 +142,7 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
                         ),
                         huaweiCuvaHdr = huaweiCuvaFallback,
                     ).takeIf {
-                        (streamCanReachFps(map, size, fps) ||
-                            huawei4k60StreamDurationOverride(size.width, size.height, fps, hasHuawei4k60 && OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(size, fps))) &&
-                            OpenCineLogGpuPipeline.findEncoder(size, fps) != null
+                        canReachFps && OpenCineLogGpuPipeline.findEncoder(size, fps) != null
                     }
                 }
             }
@@ -190,9 +203,10 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
         } else emptyList()
         val supportsHfrZoom = supportsZoomRatioApi &&
             hfrZoomKeys.any { it.name == "zoomRatio" }
-        // Direct Kelvin (COLOR_CORRECTION_MODE_CCT) requires API 36+, the CCT mode advertised
-        // in available color-correction modes, the temperature key present in the request
-        // keys, and a non-empty COLOR_CORRECTION_COLOR_TEMPERATURE_RANGE with lower < upper.
+        // Direct Kelvin (COLOR_CORRECTION_MODE_CCT) requires API 36+, or Huawei Kirin vendor sensorWbRange on API 29+.
+        val vendorKelvinRange = if (Build.VERSION.SDK_INT in Build.VERSION_CODES.Q until 36) {
+            HuaweiVendorControls.kelvinRange(characteristics)
+        } else null
         val kelvinRange: IntRange? = if (Build.VERSION.SDK_INT >= 36) {
             runCatching {
                 val cctSupported = characteristics.get(CameraCharacteristics.COLOR_CORRECTION_AVAILABLE_MODES)
@@ -203,11 +217,13 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
                 val valid = range != null && range.lower < range.upper
                 if (cctSupported && tempKeyPresent && valid) range!!.lower..range.upper else null
             }.getOrNull()
-        } else null
+        } else vendorKelvinRange
+        val huaweiVendorKelvinWb = Build.VERSION.SDK_INT < 36 && vendorKelvinRange != null && kelvinRange != null
+        val huaweiSmoothColorModeSupported = HuaweiVendorControls.supportsSmoothColorMode(characteristics)
         Camera2CameraDescriptor(
             cameraId = cameraId,
             timestampSourceRealtime = characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME,
-            lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING) ?: CameraCharacteristics.LENS_FACING_EXTERNAL,
+            lensFacing = lensFacing,
             focalLengthsMm = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.toList().orEmpty(),
             sensorSizeMm = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)?.let { it.width to it.height },
             aperturesFNumber = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.toList().orEmpty(),
@@ -240,7 +256,11 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
             streamUseCases = advertisedStreamUseCases(characteristics, capabilities),
             flashAvailable = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true,
             targetFpsRanges = targetFpsRanges,
-            availableFixedFps = fixedFps,
+            availableFixedFps = if (syntheticBack60 && (regularProfiles.any { it.fps == 60 } || regularLogProfiles.any { it.fps == 60 })) {
+                (fixedFps + 60).sorted()
+            } else {
+                fixedFps
+            },
             videoProfiles = videoProfiles,
             logProfiles = logProfiles,
             sensorActiveArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE),
@@ -265,6 +285,8 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
             opticalAnchors = anchors,
             supportsHfrZoom = supportsHfrZoom,
             kelvinRange = kelvinRange,
+            huaweiVendorKelvinWb = huaweiVendorKelvinWb,
+            huaweiSmoothColorModeSupported = huaweiSmoothColorModeSupported,
             tintSupported = Build.VERSION.SDK_INT >= 36 && kelvinRange != null && characteristics.availableCaptureRequestKeys.contains(CaptureRequest.COLOR_CORRECTION_COLOR_TINT),
             awbLockSupported = characteristics.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true &&
                 CaptureRequest.CONTROL_AWB_LOCK in characteristics.availableCaptureRequestKeys,
@@ -396,6 +418,33 @@ internal fun huawei4k60StreamDurationOverride(
 ): Boolean =
     huawei4k60Supported &&
         fps in 31..60 &&
+        width > 0 &&
+        height > 0 &&
+        maxOf(width, height) <= 3840 &&
+        minOf(width, height) <= 2160 &&
+        width.toLong() * height <= 3840L * 2160L
+
+internal fun huaweiBack4k60SyntheticFps(
+    lensFacing: Int,
+    hasHuawei4k60: Boolean,
+    hasHuaweiCuva: Boolean,
+    existingFixedFps: List<Int>,
+): Boolean =
+    lensFacing == CameraCharacteristics.LENS_FACING_BACK &&
+        hasHuawei4k60 &&
+        hasHuaweiCuva &&
+        60 !in existingFixedFps
+
+internal fun huaweiCuvaUhdStreamDurationOverride(
+    width: Int,
+    height: Int,
+    fps: Int,
+    huaweiCuvaSupported: Boolean,
+    huawei4k60Supported: Boolean,
+): Boolean =
+    huaweiCuvaSupported &&
+        huawei4k60Supported &&
+        fps in 24..60 &&
         width > 0 &&
         height > 0 &&
         maxOf(width, height) <= 3840 &&

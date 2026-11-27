@@ -496,6 +496,8 @@ class OpenCineLogGpuPipeline(
     fun lastBitrateResolutionSnapshot(): BitrateResolution? = lastBitrateResolution
     fun frameDiagnosticsSnapshot(): GpuFrameDiagSummary? = frameDiag?.snapshotSummary()
     fun scopePboStatsSnapshot(): AsyncPboStats? = asyncPboScopeReader?.stats()
+    @Volatile var lastZeroCopyHardwareFormat: Int? = null
+        private set
     private val handler = Handler(thread.looper)
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var context: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -512,6 +514,7 @@ class OpenCineLogGpuPipeline(
     private var encoderEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var textureId = 0
     private var program = 0
+    private var ditheredEncoderProgram = 0
     @Volatile private var operatorLut: MonitorLut? = null
     @Volatile private var subjectLut: MonitorLut? = null
     private var recordingLutTexture = 0
@@ -677,6 +680,7 @@ class OpenCineLogGpuPipeline(
                 program = fresh
                 refreshMainProgramLocations()
                 if (operatorLutProgram != 0) { GLES30.glDeleteProgram(operatorLutProgram); operatorLutProgram = 0 }
+                if (ditheredEncoderProgram != 0) { GLES30.glDeleteProgram(ditheredEncoderProgram); ditheredEncoderProgram = 0 }
                 if (hlgSignalProgram != 0) { GLES30.glDeleteProgram(hlgSignalProgram); hlgSignalProgram = 0 }
             } catch (failure: Exception) {
                 android.util.Log.w(LOG_TAG, "Lens correction shader did not link; the correction stays off.", failure)
@@ -688,11 +692,23 @@ class OpenCineLogGpuPipeline(
         appliedFrameGain = gain
     }
 
-    private fun lensSplicedSha(hlgOutput: Boolean, hdr10Output: Boolean): String = when {
+    private fun encoderDithered(): Boolean = active8BitRenderConfig && !passthroughSdr
+
+    private fun ditheredProgram(): Int {
+        if (ditheredEncoderProgram == 0) {
+            ditheredEncoderProgram = linkProgram(
+                VERTEX_SHADER,
+                transformShader(sourcePath, shaderYcbcr, lensSpliced, dither8Bit = true),
+            )
+        }
+        return ditheredEncoderProgram
+    }
+
+    private fun lensSplicedSha(hlgOutput: Boolean, hdr10Output: Boolean, dither8Bit: Boolean = false): String = when {
         passthroughSdr -> passthroughSha256(lens = true)
-        hdr10Output -> pqSignalSha256(shaderYcbcr, lens = true)
-        hlgOutput -> hlgSignalSha256(shaderYcbcr, lens = true)
-        else -> transformSha256(sourcePath, shaderYcbcr, lens = true)
+        hdr10Output -> pqSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit)
+        hlgOutput -> hlgSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit)
+        else -> transformSha256(sourcePath, shaderYcbcr, lens = true, dither8Bit = dither8Bit)
     }
 
     /**
@@ -1030,13 +1046,22 @@ class OpenCineLogGpuPipeline(
                     // aborts preparation before any native onStarted admission or file samples.
                     operatorProgram(recordingLut, forRecording = true)
                 }
+                val ditherTake = encoderDithered()
+                if (!hlgOutput && !passthroughSdr && recordingLut == null && ditherTake && ditheredEncoderProgram == 0) {
+                    check(makeCurrent(pbuffer)) { "Dithered OCLog program context is unavailable." }
+                    ditheredProgram()
+                }
                 if (hlgOutput && (hlgSignalProgram == 0 || hlgSignalProgramPq != hdr10Output)) {
                     check(makeCurrent(pbuffer)) { "HLG program context is unavailable." }
                     if (hlgSignalProgram != 0) GLES30.glDeleteProgram(hlgSignalProgram)
                     hlgSignalProgram = 0
                     // Mandatory output processing, like a recording LUT: no fallback to OCLog2 pixels.
                     val lensOn = lensSpliced
-                    hlgSignalProgram = linkProgram(VERTEX_SHADER, if (hdr10Output) pqSignalShader(shaderYcbcr, lensOn) else hlgSignalShader(shaderYcbcr, lensOn))
+                    hlgSignalProgram = linkProgram(
+                        VERTEX_SHADER,
+                        if (hdr10Output) pqSignalShader(shaderYcbcr, lensOn, dither8Bit = ditherTake)
+                        else hlgSignalShader(shaderYcbcr, lensOn, dither8Bit = ditherTake),
+                    )
                     hlgSignalProgramPq = hdr10Output
                 }
                 val projectRate = timelapse?.projectRate ?: projectRateOverride ?: CaptureFrameRate(targetFps)
@@ -1174,6 +1199,7 @@ class OpenCineLogGpuPipeline(
                     }
                     encoderEglSurface = eglSurface
                     val takeGreyReference = if (passthroughSdr) OpenCineLogGreyReference.NATIVE else greyReference
+                    val ditheredLens = eglPolicy.use8BitConfig && !passthroughSdr
                     val active = Recording(requireNotNull(ownedOutput), codec, codecSurface, muxer, candidate, geometry, embeddedAac, captureEpoch, minimumSensorTimestampNs, timelapse?.let(::TimelapseTimeline), projectRateOverride?.let(::ProjectFrameTimeline), onTimelapseProgress, onTimelapsePauseChanged, onEncodedProgress, onStopped, fileRetirement, recordingLut, onRecordingLutApplied,
                         takeGreyReference, sceneGain(takeGreyReference),
                         vuiTransfer = when {
@@ -1183,8 +1209,8 @@ class OpenCineLogGpuPipeline(
                         },
                         hlgOutput = hlgOutput, hdr10Output = hdr10Output,
                         eglRenderTargetBits = if (eglPolicy.use8BitConfig) 8 else 10,
-                        lens = appliedLens?.let { LensTakeUsage(it, lensSplicedSha(hlgOutput, hdr10Output)) },
-                        exposureCompensation = if (appliedFrameGain) ExposureCompensationTakeUsage(lensSplicedSha(hlgOutput, hdr10Output)) else null,
+                        lens = appliedLens?.let { LensTakeUsage(it, lensSplicedSha(hlgOutput, hdr10Output, dither8Bit = ditheredLens)) },
+                        exposureCompensation = if (appliedFrameGain) ExposureCompensationTakeUsage(lensSplicedSha(hlgOutput, hdr10Output, dither8Bit = ditheredLens)) else null,
                         sampleListener = sampleListener?.let(::GuardedEncodedSampleListener))
                     recording = active
                     encoderStep("codec_start", candidate.codecName) { codec.start() }
@@ -1508,6 +1534,9 @@ class OpenCineLogGpuPipeline(
             makeCurrent(pbuffer)
             applyRequestedLens()
             hb = image.hardwareBuffer ?: return
+            if (lastZeroCopyHardwareFormat == null) {
+                lastZeroCopyHardwareFormat = EglHardwareBufferBridge.describeAhb(hb)?.first ?: hb.format
+            }
             eglImg = EglHardwareBufferBridge.createEglImage(hb)
             if (eglImg == 0L) return
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
@@ -1806,6 +1835,13 @@ class OpenCineLogGpuPipeline(
         val selection = if (previewOutput) operatorLut else if (subjectLutOutput) subjectLut else recordingLut
         val lut = selection?.takeIf { monitorLutCompatible(it, passthroughSdr) }
         val previousFailure = if (subjectLutOutput) subjectLutFailure?.hash else failedOperatorLutHash
+        val useDitheredOclog = encoderDithered() &&
+            outputMode == OUTPUT_OCLOG &&
+            !previewOutput &&
+            !subjectLutOutput &&
+            recordingGeometry != null &&
+            recordingLut == null &&
+            !hlgSignal
         val selectedProgram = if (hlgSignal) {
             check(hlgSignalProgram != 0) { "HLG recording program is not prepared." }
             hlgSignalProgram
@@ -1817,6 +1853,8 @@ class OpenCineLogGpuPipeline(
             }
             check(operatorLutProgram != 0) { "Recording LUT program is not prepared." }
             operatorLutProgram
+        } else if (useDitheredOclog) {
+            ditheredProgram()
         } else if (lut != null && previousFailure != lut.cube.sha256) {
             try { operatorProgram(lut, forSubject = subjectLutOutput) } catch (failure: Exception) {
                 val status = OperatorLutStatus(lut.cube.sha256, OperatorLutState.FAILED, failure.message, monitorLutIdentity(lut))
@@ -1862,6 +1900,10 @@ class OpenCineLogGpuPipeline(
             uploadTextureMatrix(textureMatrix)
         }
         GLES30.glUniform1i(location("uOutputMode", outputModeLocation), outputMode)
+        if (useDitheredOclog || (hlgSignal && encoderDithered())) {
+            val ditherLoc = GLES30.glGetUniformLocation(selectedProgram, "uDitherFrame")
+            if (ditherLoc >= 0) GLES30.glUniform1f(ditherLoc, (recordingFrameSequence and 1023L).toFloat())
+        }
         // Monitors, scopes and the encoder see the same scaled light; a take freezes its gain.
         GLES30.glUniform1f(location("uSceneGain", sceneGainLocation), recording?.sceneGain ?: sceneGain(greyReference))
         ycbcrConversion?.takeIf { shaderYcbcr }?.let { conversion ->
@@ -2180,6 +2222,7 @@ class OpenCineLogGpuPipeline(
             active.fileRetirement.retire { active.outputDescriptor.close() }?.let(active::noteFailure)
             active.fileRetirement.finish()
             val evidence = if (success && active.failure == null) {
+                val ditheredEvidence = active.eglRenderTargetBits == 8 && !passthroughSdr && active.recordingLut == null
                 OpenCineLogRecordingEvidence(
                     encodedProgress = active.encodedProgress(),
                     avTiming = active.captureEpoch?.report(timestampNormalizer.videoOriginUs, timestampNormalizer.audioOriginUs, audioEncoderDelayFrames)
@@ -2209,7 +2252,9 @@ class OpenCineLogGpuPipeline(
                     sourceDataSpace = lastSourceDataSpace,
                     sourceDataSpaceMismatchedFrames = active.dataSpaceMismatchedFrames,
                     unexpectedSourceDataSpace = active.unexpectedDataSpace,
-                    transformSha256 = if (active.hdr10Output) pqSignalSha256(shaderYcbcr) else if (active.hlgOutput) hlgSignalSha256(shaderYcbcr) else transformSha256(sourcePath, shaderYcbcr),
+                    transformSha256 = if (active.hdr10Output) pqSignalSha256(shaderYcbcr, dither8Bit = ditheredEvidence)
+                        else if (active.hlgOutput) hlgSignalSha256(shaderYcbcr, dither8Bit = ditheredEvidence)
+                        else transformSha256(sourcePath, shaderYcbcr, dither8Bit = ditheredEvidence),
                     encodedFrames = active.frames,
                     firstPtsUs = active.firstPtsUs,
                     lastPtsUs = active.lastPtsUs,
@@ -2363,6 +2408,7 @@ class OpenCineLogGpuPipeline(
                     asyncPboScopeReader?.release()
                     asyncPboScopeReader = null
                     if (operatorLutProgram != 0) GLES30.glDeleteProgram(operatorLutProgram)
+                    if (ditheredEncoderProgram != 0) GLES30.glDeleteProgram(ditheredEncoderProgram)
                     if (hlgSignalProgram != 0) GLES30.glDeleteProgram(hlgSignalProgram)
                     if (operatorLutTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(operatorLutTexture), 0)
                     if (subjectLutTexture != 0) GLES30.glDeleteTextures(1, intArrayOf(subjectLutTexture), 0)
@@ -3193,9 +3239,15 @@ class OpenCineLogGpuPipeline(
          * ([OpenCineLogYcbcrConversion]), clamped to [0, 1] like a normalized sampler result.
          * Derived textually so both variants share one transform body.
          */
-        fun transformShader(sourcePath: OpenCineLogSourcePath, shaderYcbcr: Boolean, lens: Boolean = false): String {
+        fun transformShader(
+            sourcePath: OpenCineLogSourcePath,
+            shaderYcbcr: Boolean,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+        ): String {
             val base = if (shaderYcbcr) ycbcrVariant(fragmentShader(sourcePath)) else fragmentShader(sourcePath)
-            return if (lens) LensShaderSplice.splice(base, sourceCurve(sourcePath)) else base
+            val lensed = if (lens) LensShaderSplice.splice(base, sourceCurve(sourcePath)) else base
+            return if (dither8Bit) dither8BitShader(lensed) else lensed
         }
 
         /** The transfer the tier's camera signal carries; the lens correction decodes and re-encodes with it. */
@@ -3233,18 +3285,57 @@ class OpenCineLogGpuPipeline(
         }
 
         /** The HLG recording shader as linked; it shares the tier shader's YCbCr decoding. */
-        fun hlgSignalShader(shaderYcbcr: Boolean, lens: Boolean = false): String {
+        fun hlgSignalShader(shaderYcbcr: Boolean, lens: Boolean = false, dither8Bit: Boolean = false): String {
             val base = if (shaderYcbcr) ycbcrVariant(HLG_SIGNAL_FRAGMENT_SHADER) else HLG_SIGNAL_FRAGMENT_SHADER
-            return if (lens) LensShaderSplice.splice(base, TransferCurve.HLG) else base
+            val lensed = if (lens) LensShaderSplice.splice(base, TransferCurve.HLG) else base
+            return if (dither8Bit) dither8BitShader(lensed) else lensed
         }
 
         /**
          * The HLG recording shader with a PQ output: HLG scene light through the 1000 cd/m2 HLG OOTF
          * and the ST 2084 inverse EOTF. [HlgToPq] is its host-testable mirror.
          */
-        fun pqSignalShader(shaderYcbcr: Boolean, lens: Boolean = false): String {
+        fun pqSignalShader(shaderYcbcr: Boolean, lens: Boolean = false, dither8Bit: Boolean = false): String {
             val base = if (shaderYcbcr) ycbcrVariant(PQ_SIGNAL_FRAGMENT_SHADER) else PQ_SIGNAL_FRAGMENT_SHADER
-            return if (lens) LensShaderSplice.splice(base, TransferCurve.HLG) else base
+            val lensed = if (lens) LensShaderSplice.splice(base, TransferCurve.HLG) else base
+            return if (dither8Bit) dither8BitShader(lensed) else lensed
+        }
+
+        private const val DITHER_DECLARATIONS = """
+            uniform float uDitherFrame;
+            float occHash(vec2 p) {
+                vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+                p3 += dot(p3, p3.yzx + 33.33);
+                return fract((p3.x + p3.y) * p3.z);
+            }
+            vec3 occTpdfDither8(vec2 fragCoord, float frame) {
+                float f = mod(frame, 1024.0);
+                float r1 = occHash(fragCoord + vec2(f * 17.0, f * 31.0));
+                float r2 = occHash(fragCoord + vec2(f * 59.0 + 7.3, f * 11.0 + 3.1));
+                return vec3((r1 - r2) / 255.0);
+            }
+        """
+
+        internal fun dither8BitShader(base: String): String {
+            val withDecls = base.replaceFirst("void main() {", DITHER_DECLARATIONS.trimIndent() + "\nvoid main() {")
+            return when {
+                withDecls.contains("outColor = vec4(uOutputMode == 1 ? monitored : (uOutputMode == 2 ? flatMonitor : ocLog), 1.0);") ->
+                    withDecls.replace(
+                        "outColor = vec4(uOutputMode == 1 ? monitored : (uOutputMode == 2 ? flatMonitor : ocLog), 1.0);",
+                        "vec3 ditheredOcLog = clamp(ocLog + occTpdfDither8(gl_FragCoord.xy, uDitherFrame), 0.0, 1.0);\n    outColor = vec4(uOutputMode == 1 ? monitored : (uOutputMode == 2 ? flatMonitor : ditheredOcLog), 1.0);",
+                    )
+                withDecls.contains("outColor = vec4(hlgOetf(sceneLinear), 1.0);") ->
+                    withDecls.replace(
+                        "outColor = vec4(hlgOetf(sceneLinear), 1.0);",
+                        "outColor = vec4(clamp(hlgOetf(sceneLinear) + occTpdfDither8(gl_FragCoord.xy, uDitherFrame), 0.0, 1.0), 1.0);",
+                    )
+                withDecls.contains("outColor = vec4(pqInverseEotf(hlgOotf(sceneLinear)), 1.0);") ->
+                    withDecls.replace(
+                        "outColor = vec4(pqInverseEotf(hlgOotf(sceneLinear)), 1.0);",
+                        "outColor = vec4(clamp(pqInverseEotf(hlgOotf(sceneLinear)) + occTpdfDither8(gl_FragCoord.xy, uDitherFrame), 0.0, 1.0), 1.0);",
+                    )
+                else -> error("Dither injection found no supported shader output")
+            }
         }
 
         private fun ycbcrVariant(base: String): String {
@@ -3271,18 +3362,31 @@ class OpenCineLogGpuPipeline(
         )
 
         /** Identity of the linked transform; the shader-YCbCr variant is the qualified one. */
-        fun transformSha256(sourcePath: OpenCineLogSourcePath, shaderYcbcr: Boolean = true, lens: Boolean = false): String = MessageDigest.getInstance("SHA-256")
-            .digest(transformShader(sourcePath, shaderYcbcr, lens).toByteArray())
+        fun transformSha256(
+            sourcePath: OpenCineLogSourcePath,
+            shaderYcbcr: Boolean = true,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+        ): String = MessageDigest.getInstance("SHA-256")
+            .digest(transformShader(sourcePath, shaderYcbcr, lens, dither8Bit).toByteArray())
             .joinToString("") { "%02x".format(it) }
 
         /** Identity of the linked HLG recording shader. */
-        fun hlgSignalSha256(shaderYcbcr: Boolean = true, lens: Boolean = false): String = MessageDigest.getInstance("SHA-256")
-            .digest(hlgSignalShader(shaderYcbcr, lens).toByteArray())
+        fun hlgSignalSha256(
+            shaderYcbcr: Boolean = true,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+        ): String = MessageDigest.getInstance("SHA-256")
+            .digest(hlgSignalShader(shaderYcbcr, lens, dither8Bit).toByteArray())
             .joinToString("") { "%02x".format(it) }
 
         /** Identity of the linked PQ recording shader. */
-        fun pqSignalSha256(shaderYcbcr: Boolean = true, lens: Boolean = false): String = MessageDigest.getInstance("SHA-256")
-            .digest(pqSignalShader(shaderYcbcr, lens).toByteArray())
+        fun pqSignalSha256(
+            shaderYcbcr: Boolean = true,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+        ): String = MessageDigest.getInstance("SHA-256")
+            .digest(pqSignalShader(shaderYcbcr, lens, dither8Bit).toByteArray())
             .joinToString("") { "%02x".format(it) }
 
         /** Backward-compatible identity of the qualified HLG transform. */

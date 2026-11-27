@@ -93,4 +93,35 @@ class ResearchEncoderOverrideTest {
         assertFalse(huawei4k60StreamDurationOverride(3840, 2160, 30, huawei4k60Supported = true))
         assertFalse(huawei4k60StreamDurationOverride(3840, 2160, 120, huawei4k60Supported = true))
     }
+
+    @Test
+    fun huaweiBack4k60SyntheticFpsOnlyAppliesToBackCuvaCamerasWithout60() {
+        assertTrue(huaweiBack4k60SyntheticFps(1, hasHuawei4k60 = true, hasHuaweiCuva = true, existingFixedFps = listOf(15, 24, 30)))
+        assertFalse(huaweiBack4k60SyntheticFps(0, hasHuawei4k60 = true, hasHuaweiCuva = true, existingFixedFps = listOf(15, 24, 30)))
+        assertFalse(huaweiBack4k60SyntheticFps(1, hasHuawei4k60 = true, hasHuaweiCuva = true, existingFixedFps = listOf(15, 24, 30, 60)))
+        assertFalse(huaweiBack4k60SyntheticFps(1, hasHuawei4k60 = false, hasHuaweiCuva = true, existingFixedFps = listOf(15, 24, 30)))
+        assertFalse(huaweiBack4k60SyntheticFps(1, hasHuawei4k60 = true, hasHuaweiCuva = false, existingFixedFps = listOf(15, 24, 30)))
+    }
+
+    @Test
+    fun huaweiCuvaUhdStreamDurationOverrideAdmits24To60WithinUhd() {
+        assertTrue(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 24, huaweiCuvaSupported = true, huawei4k60Supported = true))
+        assertTrue(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 25, huaweiCuvaSupported = true, huawei4k60Supported = true))
+        assertTrue(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 30, huaweiCuvaSupported = true, huawei4k60Supported = true))
+        assertTrue(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 60, huaweiCuvaSupported = true, huawei4k60Supported = true))
+        assertFalse(huaweiCuvaUhdStreamDurationOverride(4096, 3072, 30, huaweiCuvaSupported = true, huawei4k60Supported = true))
+        assertFalse(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 20, huaweiCuvaSupported = true, huawei4k60Supported = true))
+        assertFalse(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 120, huaweiCuvaSupported = true, huawei4k60Supported = true))
+        assertFalse(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 30, huaweiCuvaSupported = false, huawei4k60Supported = true))
+        assertFalse(huaweiCuvaUhdStreamDurationOverride(3840, 2160, 30, huaweiCuvaSupported = true, huawei4k60Supported = false))
+    }
+
+    @Test
+    fun resolveTargetFpsBoundsUsesExactMatchOrHuaweiBack60Fallback() {
+        val advertised = listOf(15 to 15, 24 to 24, 30 to 30)
+        assertEquals(30 to 30, resolveTargetFpsBounds(advertised, 30, huaweiBack60Fallback = true))
+        assertEquals(60 to 60, resolveTargetFpsBounds(advertised, 60, huaweiBack60Fallback = true))
+        assertEquals(null, resolveTargetFpsBounds(advertised, 60, huaweiBack60Fallback = false))
+        assertEquals(null, resolveTargetFpsBounds(listOf(15 to 15), 30, huaweiBack60Fallback = true))
+    }
 }

@@ -40,6 +40,25 @@ class OpenCineLogGpuPipelineContractTest {
     }
 
     @Test
+    fun dithered8BitShaderAddsTpdfDitherWithoutMutatingPinnedShaders() {
+        val base = OpenCineLogGpuPipeline.transformShader(OpenCineLogSourcePath.HLG10_BT2020, shaderYcbcr = true, lens = false, dither8Bit = false)
+        val dithered = OpenCineLogGpuPipeline.transformShader(OpenCineLogSourcePath.HLG10_BT2020, shaderYcbcr = true, lens = false, dither8Bit = true)
+        assertTrue(!base.contains("occTpdfDither8"))
+        assertTrue(dithered.contains("uniform float uDitherFrame;"))
+        assertTrue(dithered.contains("occTpdfDither8(gl_FragCoord.xy, uDitherFrame)"))
+        assertNotEquals(
+            OpenCineLogGpuPipeline.TRANSFORM_SHA256,
+            OpenCineLogGpuPipeline.transformSha256(OpenCineLogSourcePath.HLG10_BT2020, shaderYcbcr = true, dither8Bit = true),
+        )
+
+        val lensedDithered = OpenCineLogGpuPipeline.transformShader(OpenCineLogSourcePath.HLG10_BT2020, shaderYcbcr = true, lens = true, dither8Bit = true)
+        assertTrue(lensedDithered.contains("lensCorrect(") && lensedDithered.contains("occTpdfDither8("))
+
+        val hlgDithered = OpenCineLogGpuPipeline.hlgSignalShader(shaderYcbcr = true, lens = true, dither8Bit = true)
+        assertTrue(hlgDithered.contains("occTpdfDither8("))
+    }
+
+    @Test
     fun shaderYcbcrVariantOnlySwapsTheSampler() {
         for (path in OpenCineLogSourcePath.entries) {
             val driver = OpenCineLogGpuPipeline.transformShader(path, shaderYcbcr = false)
