@@ -34,11 +34,18 @@ internal class ResearchLaboratory(
     private val explorationGuard = LabExplorationGuard()
     private val evidenceLimitBytes = LabStorageManager.loadEvidenceLimitBytes(context)
     private val thermalPolicy = LabThermalPolicy(evidenceLimitBytes = evidenceLimitBytes)
+    private val thermalRateTracker = LabThermalRateTracker()
     private var activeJournal: LabJournal? = null
+    private var diagnosticRecorder: LabDiagnosticRecorder? = null
+    private var healthWatchdog: com.librestatic.opencinecam.camera.CameraHealthWatchdog? = null
+    private var healthWatchdogExecutor: java.util.concurrent.ExecutorService? = null
+    private var healthWatchdogThread: android.os.HandlerThread? = null
     private var nextEnvironmentalCheck = 0L
     private var lastThermalStatus: Int? = null
     private var lastSample: ThermalSample? = null
     private var lastPowerSnapshot: PowerProfileSnapshot? = null
+    @Volatile private var activeCaseKey: String? = null
+    @Volatile private var activeCaseCameraId: String? = null
 
     fun cancel() { cancelled.set(true) }
 
@@ -59,7 +66,38 @@ internal class ResearchLaboratory(
                 journal.recordApkRevisionTransition(build)
             }
             journal.recoverInterrupted()
-            val startSample = sampleThermal(context, root, evidenceLimitBytes).also { lastSample = it }
+            val manager = context.getSystemService(CameraManager::class.java)
+            val recorder = LabDiagnosticRecorder(journal.directory).also {
+                it.start()
+                diagnosticRecorder = it
+            }
+            val watchdogExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+                Thread(r, "LabHealthWatchdog").apply { isDaemon = true }
+            }.also { healthWatchdogExecutor = it }
+            val watchdogThread = android.os.HandlerThread("LabHealthHandler").apply { start() }.also { healthWatchdogThread = it }
+            healthWatchdog = com.librestatic.opencinecam.camera.CameraHealthWatchdog(
+                manager = manager,
+                executor = watchdogExecutor,
+                handler = android.os.Handler(watchdogThread.looper),
+            ) { event ->
+                recorder.noteHealthEvent(event)
+                runCatching {
+                    journal.appendTelemetry(json(
+                        "event" to "camera_health_event",
+                        "issue" to event.issue.name,
+                        "cameraId" to event.cameraId,
+                        "detail" to event.detail,
+                        "timestampMs" to event.timestampMs,
+                        "activeCaseKey" to activeCaseKey,
+                    ))
+                }
+            }
+            val startSample = sampleThermal(
+                context, root, evidenceLimitBytes,
+                rateTracker = thermalRateTracker,
+                activeCaseKey = activeCaseKey,
+                activeCameraId = activeCaseCameraId,
+            ).also { lastSample = it }
             journal.appendTelemetry(startSample.toJson())
             when (val decision = thermalPolicy.evaluate(startSample, betweenAttempts = true)) {
                 is ThermalDecision.HardStop -> {
@@ -69,7 +107,6 @@ internal class ResearchLaboratory(
                 }
                 else -> Unit
             }
-            val manager = context.getSystemService(CameraManager::class.java)
             val scanner = Camera2PreviewEngine(context, deviceQuirks = DeviceQuirksProvider.lazy(context))
             val descriptors = try { scanner.descriptors(1920, 1080) } finally {
                 scanner.closeAsync().get(8, TimeUnit.SECONDS)
@@ -148,6 +185,16 @@ internal class ResearchLaboratory(
             }
             return reason
         } finally {
+            activeCaseKey = null
+            activeCaseCameraId = null
+            runCatching { healthWatchdog?.close() }
+            healthWatchdog = null
+            runCatching { healthWatchdogThread?.quitSafely() }
+            healthWatchdogThread = null
+            runCatching { healthWatchdogExecutor?.shutdownNow() }
+            healthWatchdogExecutor = null
+            runCatching { diagnosticRecorder?.close() }
+            diagnosticRecorder = null
             activeJournal = null
             exclusive.set(false)
         }
@@ -363,6 +410,8 @@ internal class ResearchLaboratory(
 
             val attempt = journal.begin(next, apkRevision, powerSnapshot)
             attempt.notice(sample.toJson())
+            activeCaseKey = next.attempt.key
+            activeCaseCameraId = next.attempt.camera
             val inFlight = InFlightAttemptRecord(
                 id = attempt.directory.name,
                 caseJson = next.attempt.toJson(),
@@ -372,8 +421,21 @@ internal class ResearchLaboratory(
                 buildCheckpoint(LabSessionState.RUNNING, null, stageTitle, inFlight, history, powerSnapshot, remainingPlanned),
             )
 
-            val outcome = execute(next.attempt, attempt, knowledge, video, regularLog, sourceProbe)
+            val outcome = try {
+                execute(next.attempt, attempt, knowledge, video, regularLog, sourceProbe)
+            } finally {
+                activeCaseKey = null
+                activeCaseCameraId = null
+            }
             val updatedHistory = journal.history()
+            val lastAttemptResult = updatedHistory.lastOrNull { it.id == attempt.directory.name }
+            if (lastAttemptResult?.verdict == LabVerdict.FAILED || lastAttemptResult?.verdict == LabVerdict.INTERRUPTED) {
+                diagnosticRecorder?.snapshotAnomaly(
+                    reason = "${lastAttemptResult.verdict.name}: ${lastAttemptResult.attempt.key}",
+                    attemptDir = attempt.directory,
+                    latestSample = lastSample,
+                )
+            }
             val updatedEffective = effectiveHistoryFor(updatedHistory, interruptedCounts, skippedKeys)
             val updatedRemaining = planner.remainingPlannedCount(updatedEffective, skippedKeys)
             val postPower = LabPowerProfile.capture(context).also { lastPowerSnapshot = it }
@@ -635,7 +697,12 @@ internal class ResearchLaboratory(
         var announcedWait = false
         while (true) {
             checkTimeAndCancel()
-            val sample = sampleThermal(context, root, evidenceLimitBytes)
+            val sample = sampleThermal(
+                context, root, evidenceLimitBytes,
+                rateTracker = thermalRateTracker,
+                activeCaseKey = activeCaseKey,
+                activeCameraId = activeCaseCameraId,
+            )
             lastSample = sample
             val statusChanged = lastThermalStatus != null && lastThermalStatus != sample.thermalStatus
             lastThermalStatus = sample.thermalStatus
@@ -697,7 +764,13 @@ internal class ResearchLaboratory(
         val now = SystemClock.elapsedRealtime()
         if (!forceSample && now < nextEnvironmentalCheck) return
         nextEnvironmentalCheck = now + TELEMETRY_INTERVAL_MS
-        val sample = sampleThermal(context, root, evidenceLimitBytes, includePowerProfile = false)
+        val sample = sampleThermal(
+            context, root, evidenceLimitBytes,
+            includePowerProfile = false,
+            rateTracker = thermalRateTracker,
+            activeCaseKey = activeCaseKey,
+            activeCameraId = activeCaseCameraId,
+        )
         lastSample = sample
         val statusChanged = lastThermalStatus != null && lastThermalStatus != sample.thermalStatus
         lastThermalStatus = sample.thermalStatus

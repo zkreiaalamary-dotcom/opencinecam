@@ -33,7 +33,21 @@ internal data class ThermalSample(
     val evidenceLimitBytes: Long = LabStorageManager.DEFAULT_EVIDENCE_LIMIT_BYTES,
     val batteryTempRaw: Int = batteryTempTenthsC,
     val powerProfile: PowerProfileSnapshot? = null,
+    val shellRateCPerMin: Double? = null,
+    val batteryRateCPerMin: Double? = null,
+    val rapidHeatingWarning: Boolean = false,
+    val activeCaseKey: String? = null,
+    val activeCameraId: String? = null,
 ) {
+    val shellFrameC: Double? get() = extractThermalZoneC(sysZones, "shell_frame")
+    val shellLevelC: Double? get() = extractThermalZoneC(sysZones, "shell_level")
+    val boardHotspotC: Double? get() = listOfNotNull(
+        extractThermalZoneC(sysZones, "system_h"),
+        extractThermalZoneC(sysZones, "pa_0"),
+        extractThermalZoneC(sysZones, "dcxo0"),
+        extractThermalZoneC(sysZones, "charger"),
+    ).maxOrNull()
+
     fun toJson(): JSONObject = json(
         "event" to "telemetry",
         "elapsedMs" to elapsedMs,
@@ -48,6 +62,14 @@ internal data class ThermalSample(
         "batteryTempRaw" to batteryTempRaw,
         "batteryTempTenthsC" to batteryTempTenthsC,
         "batteryTempC" to if (batteryTempTenthsC >= 0) batteryTempTenthsC / 10.0 else null,
+        "shellFrameC" to shellFrameC,
+        "shellLevelC" to shellLevelC,
+        "boardHotspotC" to boardHotspotC,
+        "shellRateCPerMin" to shellRateCPerMin,
+        "batteryRateCPerMin" to batteryRateCPerMin,
+        "rapidHeatingWarning" to rapidHeatingWarning,
+        "activeCaseKey" to activeCaseKey,
+        "activeCameraId" to activeCameraId,
         "batteryVoltageMv" to batteryVoltageMv,
         "batteryCurrentUa" to batteryCurrentUa,
         "plugged" to plugged,
@@ -63,6 +85,59 @@ internal data class ThermalSample(
         },
         "powerProfile" to powerProfile?.toJson(),
     )
+}
+
+internal fun extractThermalZoneC(sysZones: Map<String, Int>, key: String): Double? {
+    val raw = sysZones[key] ?: return null
+    val c = normalizeSysZoneC(raw)
+    return c.takeIf { it > -30.0 && it < 150.0 && (it != 0.0 || key != "shell_level") }
+}
+
+internal fun parseThermalZoneIndex(name: String): Int =
+    name.removePrefix("thermal_zone").toIntOrNull() ?: Int.MAX_VALUE
+
+/** Tracks dT/dt (°C/min) across samples over >= 10 s windows to detect abnormal thermal spikes early. */
+internal class LabThermalRateTracker {
+    private var prevBatterySample: Pair<Long, Double>? = null
+    private var prevShellSample: Pair<Long, Double>? = null
+
+    @Synchronized
+    fun update(sample: ThermalSample): ThermalSample {
+        val tMs = sample.elapsedMs
+        val batC = if (sample.batteryTempTenthsC >= 0) sample.batteryTempTenthsC / 10.0 else null
+        val shC = sample.shellFrameC
+        val batRate = computeRate(prevBatterySample, tMs, batC)?.also {
+            if (batC != null && (prevBatterySample == null || tMs - prevBatterySample!!.first >= 10_000L)) {
+                prevBatterySample = tMs to batC
+            }
+        }
+        val shellRate = computeRate(prevShellSample, tMs, shC)?.also {
+            if (shC != null && (prevShellSample == null || tMs - prevShellSample!!.first >= 10_000L)) {
+                prevShellSample = tMs to shC
+            }
+        }
+        if (prevBatterySample == null && batC != null) prevBatterySample = tMs to batC
+        if (prevShellSample == null && shC != null) prevShellSample = tMs to shC
+        val rapid = (shellRate != null && shellRate >= RAPID_SHELL_RATE_C_PER_MIN) ||
+            (batRate != null && batRate >= RAPID_BATTERY_RATE_C_PER_MIN)
+        return sample.copy(
+            shellRateCPerMin = shellRate,
+            batteryRateCPerMin = batRate,
+            rapidHeatingWarning = rapid,
+        )
+    }
+
+    private fun computeRate(prev: Pair<Long, Double>?, nowMs: Long, nowC: Double?): Double? {
+        if (prev == null || nowC == null) return null
+        val dtMs = nowMs - prev.first
+        if (dtMs < 10_000L) return null
+        return ((nowC - prev.second) * 60_000.0) / dtMs.toDouble()
+    }
+
+    companion object {
+        const val RAPID_SHELL_RATE_C_PER_MIN = 3.0
+        const val RAPID_BATTERY_RATE_C_PER_MIN = 2.5
+    }
 }
 
 internal fun normalizeBatteryTempTenthsC(raw: Int): Int = when {
@@ -131,21 +206,31 @@ internal class LabThermalPolicy(
 
         val batteryHot = sample.batteryTempTenthsC >= PAUSE_BATTERY_TEMP_TENTHS_C
         val batteryCooled = sample.batteryTempTenthsC < 0 || sample.batteryTempTenthsC <= RESUME_BATTERY_TEMP_TENTHS_C
+        val shellC = sample.shellFrameC
+        val shellHot = shellC != null && shellC >= PAUSE_SHELL_FRAME_C
+        val shellCooled = shellC == null || shellC <= RESUME_SHELL_FRAME_C
+        val boardC = sample.boardHotspotC
+        val boardHot = boardC != null && boardC >= PAUSE_BOARD_HOTSPOT_C
+        val boardCooled = boardC == null || boardC <= RESUME_BOARD_HOTSPOT_C
         val osDangerous = sample.thermalStatus >= DANGEROUS_THERMAL_STATUS
 
-        if (batteryHot || osDangerous) {
+        if (batteryHot || shellHot || boardHot || osDangerous) {
             inThermalPause = true
+            val shellLabel = shellC?.let { String.format(Locale.ROOT, "%.1f °C", it) } ?: "n/a"
+            val boardLabel = boardC?.let { String.format(Locale.ROOT, "%.1f °C", it) } ?: "n/a"
             return ThermalDecision.CooldownWait(
-                "Thermal pause (${formatC(sample.batteryTempTenthsC)}, OS=${thermalStatusLabel(sample.thermalStatus)}): " +
-                    "waiting for battery <= 35.0 °C and OS status < SEVERE to auto-resume…",
+                "Thermal pause (bat=${formatC(sample.batteryTempTenthsC)}, shell=$shellLabel, board=$boardLabel, OS=${thermalStatusLabel(sample.thermalStatus)}): " +
+                    "waiting for bat <= 35.0 °C, shell <= 37.0 °C, board <= 42.0 °C and OS < SEVERE to auto-resume…",
             )
         }
 
         if (inThermalPause) {
-            if (!batteryCooled) {
+            if (!batteryCooled || !shellCooled || !boardCooled) {
+                val shellLabel = shellC?.let { String.format(Locale.ROOT, "%.1f °C", it) } ?: "n/a"
+                val boardLabel = boardC?.let { String.format(Locale.ROOT, "%.1f °C", it) } ?: "n/a"
                 return ThermalDecision.CooldownWait(
-                    "Thermal cooldown (${formatC(sample.batteryTempTenthsC)}, OS=${thermalStatusLabel(sample.thermalStatus)}): " +
-                        "auto-resuming at <= 35.0 °C…",
+                    "Thermal cooldown (bat=${formatC(sample.batteryTempTenthsC)}, shell=$shellLabel, board=$boardLabel, OS=${thermalStatusLabel(sample.thermalStatus)}): " +
+                        "auto-resuming when cooled…",
                 )
             }
             inThermalPause = false
@@ -163,6 +248,10 @@ internal class LabThermalPolicy(
         const val MIN_BATTERY_PERCENT = 25
         const val PAUSE_BATTERY_TEMP_TENTHS_C = 400
         const val RESUME_BATTERY_TEMP_TENTHS_C = 350
+        const val PAUSE_SHELL_FRAME_C = 41.5
+        const val RESUME_SHELL_FRAME_C = 37.0
+        const val PAUSE_BOARD_HOTSPOT_C = 48.0
+        const val RESUME_BOARD_HOTSPOT_C = 42.0
         const val DANGEROUS_THERMAL_STATUS = PowerManager.THERMAL_STATUS_SEVERE
         const val EMERGENCY_THERMAL_STATUS = PowerManager.THERMAL_STATUS_EMERGENCY
         const val MIN_FREE_BYTES = LabStorageManager.DEVICE_FREE_RESERVE_BYTES
@@ -180,6 +269,9 @@ internal fun sampleThermal(
     evidenceRoot: File,
     evidenceLimitBytes: Long = LabStorageManager.loadEvidenceLimitBytes(context),
     includePowerProfile: Boolean = true,
+    rateTracker: LabThermalRateTracker? = null,
+    activeCaseKey: String? = null,
+    activeCameraId: String? = null,
 ): ThermalSample {
     val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
     val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -204,7 +296,7 @@ internal fun sampleThermal(
         limitBytes = evidenceLimitBytes,
     ).totalBytes
     val powerSnapshot = if (includePowerProfile) runCatching { LabPowerProfile.capture(context) }.getOrNull() else null
-    return ThermalSample(
+    val base = ThermalSample(
         elapsedMs = SystemClock.elapsedRealtime(),
         epochMs = System.currentTimeMillis(),
         thermalStatus = thermalStatus,
@@ -222,17 +314,24 @@ internal fun sampleThermal(
         evidenceLimitBytes = evidenceLimitBytes,
         batteryTempRaw = rawTemp,
         powerProfile = powerSnapshot,
+        activeCaseKey = activeCaseKey,
+        activeCameraId = activeCameraId,
     )
+    return rateTracker?.update(base) ?: base
 }
 
-internal fun readSysThermalZones(maxZones: Int = 12): Map<String, Int> = runCatching {
+internal fun readSysThermalZones(maxZones: Int = 64): Map<String, Int> = runCatching {
     val dir = File("/sys/class/thermal")
-    val zones = dir.listFiles { file -> file.name.startsWith("thermal_zone") }?.sortedBy { it.name }.orEmpty()
+    val zones = dir.listFiles { file -> file.name.startsWith("thermal_zone") }
+        ?.sortedWith(compareBy<File> { parseThermalZoneIndex(it.name) }.thenBy { it.name })
+        .orEmpty()
     buildMap {
         for (zone in zones) {
             if (size >= maxZones) break
             val type = runCatching { File(zone, "type").readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() } ?: zone.name
             val temp = runCatching { File(zone, "temp").readText().trim().toIntOrNull() }.getOrNull() ?: continue
+            val tempC = normalizeSysZoneC(temp)
+            if (tempC <= -30.0 || tempC >= 150.0) continue
             put(type, temp)
         }
     }

@@ -118,6 +118,8 @@ data class Camera2CameraDescriptor(
     val opticalAnchors: List<ZoomAnchor> = emptyList(),
     val supportsHfrZoom: Boolean = false,
     val kelvinRange: IntRange? = null,
+    val huaweiVendorKelvinWb: Boolean = false,
+    val huaweiSmoothColorModeSupported: Boolean = false,
     /** SENSOR_INFO_PHYSICAL_SIZE in mm (width, height), when advertised. */
     val sensorSizeMm: Pair<Float, Float>? = null,
     /** LENS_INFO_AVAILABLE_APERTURES as f-numbers; empty when not advertised. */
@@ -1011,6 +1013,16 @@ class Camera2PreviewEngine(
     internal var requestedTargetFps = DEFAULT_TARGET_FPS
     /** cameraExecutor: reopens after a camera provider death, see [reopenWhenAvailable]. */
     private val reopenPolicy = CameraReopenPolicy()
+    /** Detects CameraDaemon restarts (multi-camera bounce), openCamera hangs, and HAL service/device faults. */
+    internal val healthWatchdog = CameraHealthWatchdog(manager, cameraExecutor, imageHandler) { event ->
+        Log.w(TAG, "CameraHealthWatchdog: ${event.issue} cam=${event.cameraId}: ${event.detail}")
+        if (event.issue == CameraHealthIssue.DAEMON_BOUNCE) {
+            listener?.onAuditWarning(event.detail)
+        }
+    }
+    internal var pendingOpenTimeout: Runnable? = null
+    fun recentCameraHealthEvents(): List<CameraHealthEvent> = healthWatchdog.tracker.recentEvents()
+    fun activeZeroCopyHardwareFormat(): Int? = logPipeline?.lastZeroCopyHardwareFormat
     /** cameraExecutor: the reopen waiting for the camera to come back, cancelled by [closeResources]. */
     private var pendingReopen: PendingReopen? = null
     /** Low-light auto frame rate is on for the active graph; every other graph sends an explicit 0. */
@@ -1419,6 +1431,8 @@ class Camera2PreviewEngine(
                 try {
                     val callback = object : CameraDevice.StateCallback() {
                         override fun onOpened(device: CameraDevice) {
+                            healthWatchdog.cancelOpenTimeout(pendingOpenTimeout)
+                            pendingOpenTimeout = null
                             cameraOpening = false
                             if (disposed.get() || currentGeneration != generation) {
                                 closeCameraDevice(device)
@@ -1447,6 +1461,8 @@ class Camera2PreviewEngine(
                         }
 
                         override fun onDisconnected(device: CameraDevice) {
+                            healthWatchdog.cancelOpenTimeout(pendingOpenTimeout)
+                            pendingOpenTimeout = null
                             cameraOpening = false
                             closeCameraDevice(device)
                             if (currentGeneration == generation) {
@@ -1457,6 +1473,9 @@ class Camera2PreviewEngine(
                         }
 
                         override fun onError(device: CameraDevice, error: Int) {
+                            healthWatchdog.cancelOpenTimeout(pendingOpenTimeout)
+                            pendingOpenTimeout = null
+                            healthWatchdog.noteCameraError(device.id, error)
                             cameraOpening = false
                             closeCameraDevice(device)
                             if (currentGeneration == generation) {
@@ -1497,9 +1516,24 @@ class Camera2PreviewEngine(
                         callback.onOpened(warmDevice)
                     } else {
                         cameraOpening = true
+                        healthWatchdog.noteAppOpening(cameraIdToOpen)
+                        pendingOpenTimeout = healthWatchdog.scheduleOpenTimeout(cameraIdToOpen) { ev ->
+                            cameraExecutor.execute {
+                                if (cameraOpening && currentGeneration == generation && !disposed.get()) {
+                                    cameraOpening = false
+                                    pendingOpenTimeout = null
+                                    Log.e(TAG, ev.detail)
+                                    endTakeOnCameraLoss(RawVideoReasons.CAMERA_ERROR)
+                                    listener.onFailure("camera-open-timeout", "Camera open timed out waiting for the camera service.", true)
+                                    finishCloseIfIdle()
+                                }
+                            }
+                        }
                         manager.openCamera(cameraIdToOpen, cameraExecutor, callback)
                     }
                 } catch (failure: Exception) {
+                    healthWatchdog.cancelOpenTimeout(pendingOpenTimeout)
+                    pendingOpenTimeout = null
                     cameraOpening = false
                     if (withdrawLensLock(LensLockUnavailable.OPEN_FAILED)) return@Runnable
                     listener.onFailure("camera-open-exception", failure.message ?: "Camera open failed.", true)
@@ -3181,6 +3215,8 @@ class Camera2PreviewEngine(
     }
 
     private fun closeResources(keepWarm: Boolean = false) {
+        healthWatchdog.cancelOpenTimeout(pendingOpenTimeout)
+        pendingOpenTimeout = null
         cancelPendingReopen()
         if (!keepWarm) retireWarm("the camera was released")
         pendingPreviewStartedReceipt = null
@@ -3366,6 +3402,7 @@ class Camera2PreviewEngine(
     override fun close() {
         if (!disposed.compareAndSet(false, true)) return
         runCatching { powerManager?.removeThermalStatusListener(thermalStatusListener) }
+        runCatching { healthWatchdog.close() }
         cameraExecutor.execute {
             closeStarted = true
             val released = ownerLease?.releaseAfter(nativeRetirement) ?: nativeRetirement

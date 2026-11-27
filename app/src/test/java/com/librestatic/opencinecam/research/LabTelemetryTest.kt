@@ -126,4 +126,48 @@ class LabTelemetryTest {
         assertTrue(lines[1].contains("\"event\":\"run_paused\""))
         assertTrue(pauseEntry.contains("Paused due to thermal load"))
     }
+
+    @Test
+    fun tracksAllThermalZonesShellFrameBoardHotspotAndHeatingRate() {
+        assertEquals(24, parseThermalZoneIndex("thermal_zone24"))
+        assertEquals(3, parseThermalZoneIndex("thermal_zone3"))
+        assertEquals(Int.MAX_VALUE, parseThermalZoneIndex("cooling_device0"))
+
+        val tracker = LabThermalRateTracker()
+        val s1 = tracker.update(
+            sample(elapsedMs = 1_000L, batteryTempTenthsC = 320).copy(
+                sysZones = mapOf("shell_frame" to 33_000, "system_h" to 36_000, "pa_0" to 35_000),
+            ),
+        )
+        assertEquals(33.0, s1.shellFrameC!!, 1e-6)
+        assertEquals(36.0, s1.boardHotspotC!!, 1e-6)
+        assertEquals(false, s1.rapidHeatingWarning)
+
+        val s2 = tracker.update(
+            sample(elapsedMs = 31_000L, batteryTempTenthsC = 335).copy(
+                sysZones = mapOf("shell_frame" to 35_000, "system_h" to 40_000),
+            ),
+        )
+        assertEquals(4.0, s2.shellRateCPerMin!!, 1e-6)
+        assertEquals(3.0, s2.batteryRateCPerMin!!, 1e-6)
+        assertEquals(true, s2.rapidHeatingWarning)
+
+        // Shell frame >= 41.5 C triggers CooldownWait even if battery is 36.0 C, and resumes <= 37.0 C.
+        val policy = LabThermalPolicy()
+        assertTrue(
+            policy.evaluate(
+                sample(elapsedMs = 40_000L, batteryTempTenthsC = 360).copy(sysZones = mapOf("shell_frame" to 41_600)),
+            ) is ThermalDecision.CooldownWait,
+        )
+        assertTrue(
+            policy.evaluate(
+                sample(elapsedMs = 60_000L, batteryTempTenthsC = 340).copy(sysZones = mapOf("shell_frame" to 38_000)),
+            ) is ThermalDecision.CooldownWait,
+        )
+        assertTrue(
+            policy.evaluate(
+                sample(elapsedMs = 90_000L, batteryTempTenthsC = 340).copy(sysZones = mapOf("shell_frame" to 36_900)),
+            ) is ThermalDecision.Continue,
+        )
+    }
 }

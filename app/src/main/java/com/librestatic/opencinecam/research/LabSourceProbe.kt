@@ -139,6 +139,31 @@ internal fun filterInterestingVendorKeys(names: Collection<String>): List<String
     return names.filter { !it.startsWith("android.") && pattern.containsMatchIn(it) }.distinct().sorted()
 }
 
+internal fun isHuaweiKirinDevice(
+    manufacturer: String = Build.MANUFACTURER,
+    hardware: String = Build.HARDWARE,
+): Boolean {
+    val m = manufacturer.lowercase(Locale.ROOT)
+    val h = hardware.lowercase(Locale.ROOT)
+    return "huawei" in m || "honor" in m || "kirin" in h || "hi" in h && h.startsWith("kirin")
+}
+
+internal fun tonemapPresetCurveQuarantineReason(
+    mode: Int,
+    advertisedModes: Set<Int>,
+    manufacturer: String = Build.MANUFACTURER,
+    hardware: String = Build.HARDWARE,
+): String? {
+    if (mode != CaptureRequest.TONEMAP_MODE_PRESET_CURVE) return null
+    if (isHuaweiKirinDevice(manufacturer, hardware)) {
+        return "huawei-hal-tonemap-preset-curve-elemSize-abort-0x45f"
+    }
+    if (mode !in advertisedModes) {
+        return "TONEMAP_MODE_PRESET_CURVE not advertised in TONEMAP_AVAILABLE_TONE_MAP_MODES; quarantined to prevent cameraserver crash."
+    }
+    return null
+}
+
 /**
  * Hardware probes for source precision & ISP tone mapping:
  *  - [LabPath.ISP_TONEMAP_AB]: A/B YUV_420_888 histogram comparison between default ISP tone map
@@ -218,13 +243,14 @@ internal class LabSourceProbe(
         )
         for ((name, mode, gamma) in toneRequests) {
             checkBudget()
-            // PRESET_CURVE (4) triggered cameraserver SIGABRT on Pura 80 Pro when unadvertised.
-            if (mode == CaptureRequest.TONEMAP_MODE_PRESET_CURVE && mode !in advertisedToneModes) {
+            val quarantineReason = tonemapPresetCurveQuarantineReason(mode, advertisedToneModes)
+            if (quarantineReason != null) {
                 val skippedObj = json(
                     "armName" to name,
                     "requestedToneMapMode" to mode,
                     "skipped" to true,
-                    "skipReason" to "TONEMAP_MODE_PRESET_CURVE not advertised in TONEMAP_AVAILABLE_TONE_MAP_MODES; quarantined to prevent cameraserver crash.",
+                    "quarantineReason" to quarantineReason,
+                    "skipReason" to quarantineReason,
                 )
                 toneArms.put(skippedObj)
                 attempt.notice(json("event" to "isp_tonemap_extra_arm", "details" to skippedObj))
@@ -245,8 +271,6 @@ internal class LabSourceProbe(
                     builder.set(CaptureRequest.TONEMAP_MODE, mode)
                     if (mode == CaptureRequest.TONEMAP_MODE_GAMMA_VALUE) {
                         builder.set(CaptureRequest.TONEMAP_GAMMA, gamma)
-                    } else if (mode == CaptureRequest.TONEMAP_MODE_PRESET_CURVE) {
-                        builder.set(CaptureRequest.TONEMAP_PRESET_CURVE, CaptureRequest.TONEMAP_PRESET_CURVE_SRGB)
                     }
                 }
             } catch (t: Throwable) {

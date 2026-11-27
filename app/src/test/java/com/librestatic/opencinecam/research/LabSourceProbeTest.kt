@@ -67,4 +67,26 @@ class LabSourceProbeTest {
         )
         assertTrue(filtered.none { it.startsWith("android.") })
     }
+
+    @Test
+    fun tonemapPresetCurveAlwaysQuarantinedOnHuaweiOrWhenUnadvertised() {
+        assertEquals(
+            "huawei-hal-tonemap-preset-curve-elemSize-abort-0x45f",
+            tonemapPresetCurveQuarantineReason(
+                mode = 4, // TONEMAP_MODE_PRESET_CURVE
+                advertisedModes = setOf(0, 1, 2, 4),
+                manufacturer = "HUAWEI",
+                hardware = "kirin9020",
+            ),
+        )
+        assertEquals(
+            null,
+            tonemapPresetCurveQuarantineReason(
+                mode = 1, // TONEMAP_MODE_FAST
+                advertisedModes = setOf(0, 1, 2),
+                manufacturer = "HUAWEI",
+                hardware = "kirin9020",
+            ),
+        )
+    }
 }
