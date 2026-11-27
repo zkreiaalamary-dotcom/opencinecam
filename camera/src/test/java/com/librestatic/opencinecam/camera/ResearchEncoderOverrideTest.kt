@@ -49,6 +49,17 @@ class ResearchEncoderOverrideTest {
         )
         assertTrue(researched.use8BitConfig)
         assertFalse(researched.useBt2020Linear)
+
+        val hisiWorkaround = OpenCineLogGpuPipeline.resolveEglSurfacePolicy(
+            passthroughSdr = false,
+            hlgOutput = false,
+            hasRecordingLut = false,
+            override = null,
+            hisiliconMain10Workaround = true,
+        )
+        assertTrue(hisiWorkaround.use8BitConfig)
+        assertFalse(hisiWorkaround.useBt2020Linear)
+        assertFalse(hisiWorkaround.useHlgSurface)
     }
 
     @Test
@@ -70,5 +81,16 @@ class ResearchEncoderOverrideTest {
         assertFalse(defaults.enableRealtimeCodecKeys)
         assertFalse(defaults.singleContextWhen8Bit)
         assertEquals(1, defaults.previewFpsDivisor)
+    }
+
+    @Test
+    fun huawei4k60StreamDurationOverrideOnlyAdmitsUhdUpTo60Fps() {
+        assertTrue(huawei4k60StreamDurationOverride(3840, 2160, 60, huawei4k60Supported = true))
+        assertTrue(huawei4k60StreamDurationOverride(2720, 1536, 60, huawei4k60Supported = true))
+        assertFalse(huawei4k60StreamDurationOverride(3840, 2160, 60, huawei4k60Supported = false))
+        assertFalse(huawei4k60StreamDurationOverride(4096, 3072, 60, huawei4k60Supported = true))
+        assertFalse(huawei4k60StreamDurationOverride(4096, 2304, 60, huawei4k60Supported = true))
+        assertFalse(huawei4k60StreamDurationOverride(3840, 2160, 30, huawei4k60Supported = true))
+        assertFalse(huawei4k60StreamDurationOverride(3840, 2160, 120, huawei4k60Supported = true))
     }
 }

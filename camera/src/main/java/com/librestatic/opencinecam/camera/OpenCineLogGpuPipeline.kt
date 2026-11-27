@@ -17,7 +17,10 @@ import android.media.audiofx.AudioEffect
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
 import android.media.audiofx.AcousticEchoCanceler
+import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
+import android.hardware.HardwareBuffer
+import android.media.ImageReader
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -54,6 +57,7 @@ import com.librestatic.opencinecam.camera.calibration.PhysicalTimeline
 import com.librestatic.opencinecam.camera.calibration.TransferCurve
 import com.librestatic.opencinecam.camera.calibration.multiplyColumnMajor4
 import com.librestatic.opencinecam.core.model.PolicyMode
+import com.librestatic.opencinecam.media.video.EglHardwareBufferBridge
 import com.librestatic.opencinecam.media.video.SdrAvcCaptureKind
 import com.librestatic.opencinecam.media.video.SdrAvcEncoderDecision
 import com.librestatic.opencinecam.media.video.SurfaceEncoderPick
@@ -62,8 +66,9 @@ import com.librestatic.opencinecam.media.video.decideSdrAvcEncoder
 import com.librestatic.opencinecam.media.video.VideoCodec
 import com.librestatic.opencinecam.media.video.VideoCodecPreference
 import com.librestatic.opencinecam.media.video.VideoEncoderSelector
-import com.librestatic.opencinecam.media.video.resolveVideoCodec
 import com.librestatic.opencinecam.media.video.platformSurfaceEncoders
+import com.librestatic.opencinecam.media.video.requiresExplicitHevcLevel
+import com.librestatic.opencinecam.media.video.resolveVideoCodec
 
 /** Strict refused the start: only a software encoder fits. A soft refusal, never an engine failure. */
 internal class VideoEncoderStartRefused(val code: String, message: String) : IllegalStateException(message)
@@ -452,8 +457,14 @@ class OpenCineLogGpuPipeline(
     private val onOperatorLutStatus: ((OperatorLutStatus) -> Unit)? = null,
     greyReference: OpenCineLogGreyReference = OpenCineLogGreyReference.NATIVE,
     private val researchEncoderOverride: ResearchEncoderOverride? = null,
+    private val useZeroCopyVideoImageReader: Boolean = false,
     private val onFailure: (String, String) -> Unit,
 ) : AutoCloseable {
+    private val hisiliconMain10Workaround: Boolean = !passthroughSdr && runCatching {
+        findEncoder(size, targetFps)?.codecName?.let(::requiresExplicitHevcLevel) == true
+    }.getOrDefault(false)
+    private val zeroCopyActive: Boolean =
+        useZeroCopyVideoImageReader && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && EglHardwareBufferBridge.loaded
     @Volatile private var researchObserver: Camera2ResearchObserver? = null
 
     fun attachResearchObserver(observer: Camera2ResearchObserver?) {
@@ -801,6 +812,7 @@ class OpenCineLogGpuPipeline(
     private var ycbcrDataSpace: Int? = null
     private val textureMatrix = FloatArray(16)
     private var surfaceTexture: SurfaceTexture? = null
+    private var zeroCopyImageReader: ImageReader? = null
     private var inputSurface: Surface? = null
     @Volatile private var viewAssistEnabled = viewAssist
     @Volatile private var greyReference = greyReference
@@ -1076,7 +1088,7 @@ class OpenCineLogGpuPipeline(
                     if (timelapse != null || projectRateOverride != null) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
                     setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                     setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-                    if (researchEncoderOverride?.enableRealtimeCodecKeys == true) {
+                    if (researchEncoderOverride?.enableRealtimeCodecKeys == true || (hisiliconMain10Workaround && targetFps >= 60)) {
                         setInteger(MediaFormat.KEY_PRIORITY, 0)
                         setInteger(MediaFormat.KEY_OPERATING_RATE, targetFps)
                     }
@@ -1146,7 +1158,9 @@ class OpenCineLogGpuPipeline(
                             requireNotNull(aacCalibration), requireNotNull(captureEpoch), fileRetirement::noteFailure) { preparation.isCancelled || closed.get() }
                     }
                     check(!preparation.isCancelled && !closed.get()) { "Recording preparation was cancelled" }
-                    val eglPolicy = resolveEglSurfacePolicy(passthroughSdr, hlgOutput, recordingLut != null, researchEncoderOverride)
+                    val eglPolicy = resolveEglSurfacePolicy(
+                        passthroughSdr, hlgOutput, recordingLut != null, researchEncoderOverride, hisiliconMain10Workaround,
+                    )
                     val eglSurface = encoderStep("egl_window", candidate.codecName) {
                         createWindowSurface(
                             if (eglPolicy.use8BitConfig) requireNotNull(config8) else requireNotNull(config10),
@@ -1313,31 +1327,42 @@ class OpenCineLogGpuPipeline(
         return true
     }
 
+    private fun createPriorityEglContext(config: EGLConfig, shareContext: EGLContext): EGLContext {
+        val extensions = EGL14.eglQueryString(display, EGL14.EGL_EXTENSIONS).orEmpty().split(' ')
+        if ("EGL_IMG_context_priority" in extensions) {
+            val prio = EGL14.eglCreateContext(
+                display, config, shareContext,
+                intArrayOf(
+                    EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
+                    EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_HIGH_IMG,
+                    EGL14.EGL_NONE,
+                ),
+                0,
+            )
+            if (prio != EGL14.EGL_NO_CONTEXT) return prio
+        }
+        return EGL14.eglCreateContext(
+            display, config, shareContext,
+            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE),
+            0,
+        )
+    }
+
     private fun initializeEgl() {
         display = GpuEglDisplayLease.acquire()
         config10 = chooseConfig(10, 10, 10, 2)
         config8 = chooseConfig(8, 8, 8, 8) ?: error("An 8-bit EGL preview config is unavailable.")
-        val eglPolicy = resolveEglSurfacePolicy(passthroughSdr, hlgOutput = false, hasRecordingLut = false, researchEncoderOverride)
+        val eglPolicy = resolveEglSurfacePolicy(
+            passthroughSdr, hlgOutput = false, hasRecordingLut = false, researchEncoderOverride, hisiliconMain10Workaround,
+        )
         if (!eglPolicy.use8BitConfig && config10 == null) {
             error("A 10-bit RGBA EGL render target is required for honest Main10 LOG recording.")
         }
         active8BitRenderConfig = eglPolicy.use8BitConfig
         val renderConfig = if (eglPolicy.use8BitConfig) requireNotNull(config8) else requireNotNull(config10)
-        context = EGL14.eglCreateContext(
-            display,
-            renderConfig,
-            EGL14.EGL_NO_CONTEXT,
-            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE),
-            0,
-        )
+        context = createPriorityEglContext(renderConfig, EGL14.EGL_NO_CONTEXT)
         check(context != EGL14.EGL_NO_CONTEXT) { "OpenGL ES 3 context creation failed." }
-        previewContext = EGL14.eglCreateContext(
-            display,
-            requireNotNull(config8),
-            context,
-            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE),
-            0,
-        )
+        previewContext = createPriorityEglContext(requireNotNull(config8), context)
         check(previewContext != EGL14.EGL_NO_CONTEXT) { "Shared 8-bit preview context creation failed." }
         pbuffer = EGL14.eglCreatePbufferSurface(
             display,
@@ -1400,12 +1425,21 @@ class OpenCineLogGpuPipeline(
         program = if (passthroughSdr) linkProgram(VERTEX_SHADER, PASSTHROUGH_FRAGMENT_SHADER) else linkTransformProgram()
         quad = PreviewQuad()
         refreshMainProgramLocations()
-        val createdTexture = SurfaceTexture(textureId).apply {
-            setDefaultBufferSize(size.width, size.height)
-            setOnFrameAvailableListener({ renderLatestFrame() }, handler)
+        if (zeroCopyActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val reader = createZeroCopyImageReader(size.width, size.height).apply {
+                setOnImageAvailableListener({ renderLatestImageReaderFrame() }, handler)
+            }
+            zeroCopyImageReader = reader
+            surfaceTexture = null
+            inputSurface = reader.surface
+        } else {
+            val createdTexture = SurfaceTexture(textureId).apply {
+                setDefaultBufferSize(size.width, size.height)
+                setOnFrameAvailableListener({ renderLatestFrame() }, handler)
+            }
+            surfaceTexture = createdTexture
+            inputSurface = Surface(createdTexture)
         }
-        surfaceTexture = createdTexture
-        inputSurface = Surface(createdTexture)
     }
 
     private fun refreshMainProgramLocations() {
@@ -1420,17 +1454,19 @@ class OpenCineLogGpuPipeline(
     }
 
     /**
-     * Prefers the shader YCbCr variant: the external sampler's driver conversion ignores the buffer
-     * dataspace on some GPUs. Falls back to the driver sampler, which the evidence then reports.
+     * Prefers the shader YCbCr variant for SurfaceTexture when GL_EXT_YUV_target is available.
+     * Zero-copy EGLImage inputs bind through the driver external sampler so HW 10-bit CUVA formats work cleanly.
      */
     private fun linkTransformProgram(): Int {
-        val extensions = GLES30.glGetString(GLES30.GL_EXTENSIONS).orEmpty().split(' ')
-        if ("GL_EXT_YUV_target" in extensions) {
-            try {
-                return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = true)).also { shaderYcbcr = true }
-            } catch (failure: Exception) {
-                android.util.Log.w(LOG_TAG, "GL_EXT_YUV_target shader did not link; using the driver YCbCr conversion.", failure)
-                for (attempt in 0 until 8) if (GLES30.glGetError() == GLES30.GL_NO_ERROR) break
+        if (!zeroCopyActive) {
+            val extensions = GLES30.glGetString(GLES30.GL_EXTENSIONS).orEmpty().split(' ')
+            if ("GL_EXT_YUV_target" in extensions) {
+                try {
+                    return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = true)).also { shaderYcbcr = true }
+                } catch (failure: Exception) {
+                    android.util.Log.w(LOG_TAG, "GL_EXT_YUV_target shader did not link; using the driver YCbCr conversion.", failure)
+                    for (attempt in 0 until 8) if (GLES30.glGetError() == GLES30.GL_NO_ERROR) break
+                }
             }
         }
         shaderYcbcr = false
@@ -1450,124 +1486,168 @@ class OpenCineLogGpuPipeline(
             texture.getTransformMatrix(textureMatrix)
             if (frontFacing) unmirrorSurfaceTextureMatrix(textureMatrix)
             val frameDataSpace = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) texture.dataSpace else null
-            lastSourceDataSpace = frameDataSpace
-            if (shaderYcbcr && (ycbcrConversion == null || ycbcrDataSpace != frameDataSpace)) {
-                ycbcrConversion = OpenCineLogYcbcrConversion.forDataSpace(frameDataSpace, sourcePath)
-                ycbcrDataSpace = frameDataSpace
-            }
-            val timestampNs = texture.timestamp
-            viewfinderGapTrace?.onFrame(timestampNs, android.os.SystemClock.elapsedRealtimeNanos())
-            frameZoomCrop = zoomLagTimeline.cropFor(timestampNs, ZOOM_LAG_WAIT_NS)
-            viewfinderGapTrace?.onZoomCrop(timestampNs, frameZoomCrop, zoomLagTimeline.lastExact, zoomLagTimeline.lastWaitNs)
-            frameGain = if (appliedFrameGain) frameGainTimeline.cropFor(timestampNs, ZOOM_LAG_WAIT_NS) else 1f
-            appliedLens?.let { lens ->
-                val found = lensTimeline.lookup(timestampNs)
-                if (!found.exact) lensFallbackCounter.incrementAndGet()
-                frameLensLookup = found
-                frameLensEntry = lens.entryFor(found.physicalId)
-            }
-            recording?.takeIf { it.acceptFrames.get() && recordingFrameMeetsWhiteBalanceBoundary(timestampNs, it.minimumSensorTimestampNs) }?.let { active ->
-                active.noteSourceDataSpace(frameDataSpace, sourcePath)
-                if (active.ycbcrConversion == null) active.ycbcrConversion = ycbcrConversion?.label
-                val capturePts = active.captureEpoch?.mapVideoInput(timestampNs)
-                if (!active.videoRegressionLogged && (active.captureEpoch?.regressedVideoFrames() ?: 0L) > 0L) {
-                    active.videoRegressionLogged = true
-                    android.util.Log.w(LOG_TAG, "Camera timestamp regressed to $timestampNs ns; frame dropped (counted in sharedPause.regressedVideoFrames).")
-                }
-                if (!active.pauseStatusPublished && active.captureEpoch?.pauseAvailable() == true) active.reportPauseStatus()
-                val selectedPts = when {
-                    active.timelapse != null -> active.timelapse.select(timestampNs)
-                    active.projectTimeline != null -> active.projectTimeline.select(timestampNs)
-                    else -> if (active.captureEpoch == null) timestampNs else capturePts
-                }
-                if (selectedPts != null && encoderEglSurface != EGL14.EGL_NO_SURFACE) {
-                    frameDiag?.skip()
-                    check(makeCurrent(encoderEglSurface)) { "Encoder EGL surface is unavailable." }
-                    draw(
-                        outputMode = OUTPUT_OCLOG,
-                        width = active.geometry.encodedSize.width,
-                        height = active.geometry.encodedSize.height,
-                        previewOutput = false,
-                        recordingGeometry = active.geometry,
-                        recordingLut = active.recordingLut,
-                        hlgSignal = active.hlgOutput,
-                    )
-                    frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.ENCODER_DRAW)
-                    frameLensLookup?.let { found -> active.lens?.record(found.physicalId, found.exact) }
-                    active.exposureCompensation?.record(frameGain)
-                    check(EGLExt.eglPresentationTimeANDROID(display, encoderEglSurface, selectedPts)) { "Encoder rejected presentation timestamp." }
-                    check(EGL14.eglSwapBuffers(display, encoderEglSurface)) { "Encoder EGL swap failed." }
-                    recordingFrameSequence++
-                    frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.ENCODER_SWAP)
-                    if (!active.recordedFrameListenerFailed) onRecordedFrame?.let { report ->
-                        try { report(timestampNs, selectedPts) } catch (problem: Exception) {
-                            active.recordedFrameListenerFailed = true
-                            android.util.Log.w(LOG_TAG, "Recorded frame listener failed; it is not called again for this take", problem)
-                        }
-                    }
-                    if (!active.firstFrameReported) {
-                        active.firstFrameReported = true
-                        onFirstRecordedFrame?.let { report ->
-                            try { report(timestampNs) } catch (problem: Exception) {
-                                android.util.Log.w(LOG_TAG, "First recorded frame listener failed", problem)
-                            }
-                        }
-                    }
-                    if (!active.lutApplied && active.recordingLut != null) {
-                        active.lutApplied = true
-                        active.onRecordingLutApplied?.invoke(requireNotNull(active.lutEvidence))
-                    }
-                    active.timelapse?.let { clock ->
-                        active.onTimelapseProgress?.invoke(TimelapseProgress(clock.selectedFrames, clock.missedIntervals, active.candidate.codecName, active.candidate.hardwareAccelerated))
-                    }
-                }
-            }
-            frameDiag?.skip()
-            renderScopeAnalysisIfDue(timestampNs)
-            frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.SCOPES)
-            renderCalibrationReadbackIfDue(timestampNs)
-            subjectOutput?.let { output ->
-                check(makeCurrent(pbuffer)) { "Subject producer pbuffer is unavailable." }
-                output.render(sourceReceivedAtMs) { width, height, options ->
-                    val geometry = OpenCineLogPreviewGeometryCalculator.calculate(
-                        sourceWidth = size.width, sourceHeight = size.height,
-                        targetWidth = width, targetHeight = height,
-                        sensorOrientationDegrees = sensorOrientationDegrees,
-                        displayRotationDegrees = options.displayRotationDegrees,
-                        frontFacing = frontFacing, squeezeFactor = options.squeezeFactor,
-                    ).copy(mirrorHorizontally = options.mirror)
-                    requireNotNull(draw(if (options.viewAssist) OUTPUT_VIEW_ASSIST else OUTPUT_FLAT_MONITOR,
-                        width, height, previewOutput = false, outputGeometry = geometry, subjectLutOutput = true))
-                }
-            }
-            val previewDivisor = researchEncoderOverride?.previewFpsDivisor ?: 1
-            val recActive = recording?.acceptFrames?.get() == true
-            val shouldRenderPreview = when {
-                !recActive -> true
-                previewDivisor <= 0 -> false
-                previewDivisor == 1 -> true
-                else -> (recordingFrameSequence % previewDivisor.toLong()) == 0L
-            }
-            if (shouldRenderPreview && previewNativeSurface?.isValid == true && previewEglSurface != EGL14.EGL_NO_SURFACE) {
-                runCatching {
-                    check(makeCurrent(previewEglSurface)) { "Preview EGL window is unavailable." }
-                    val width = querySurface(EGL14.EGL_WIDTH).coerceAtLeast(1)
-                    val height = querySurface(EGL14.EGL_HEIGHT).coerceAtLeast(1)
-                    pendingOperatorLutStatus = null
-                    frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.SUBJECT)
-                    draw(if (viewAssistEnabled) OUTPUT_VIEW_ASSIST else OUTPUT_FLAT_MONITOR, width, height, previewOutput = true)
-                    frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.PREVIEW_DRAW)
-                    check(EGL14.eglSwapBuffers(display, previewEglSurface)) { "Preview EGL swap failed." }
-                    frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.PREVIEW_SWAP)
-                    pendingOperatorLutStatus?.let(::reportOperatorLut)
-                }.onFailure(::reportPreviewFailure)
-            }
-            frameDiag?.frameEnd(timestampNs, targetFps)
+            renderLatchedFrame(texture.timestamp, frameDataSpace, sourceReceivedAtMs)
         } catch (failure: Throwable) {
             reportGlFailure(failure)
         } finally {
             if (pbuffer != EGL14.EGL_NO_SURFACE) makeCurrent(pbuffer)
         }
+    }
+
+    private fun renderLatestImageReaderFrame() {
+        val reader = zeroCopyImageReader ?: return
+        val image = runCatching { reader.acquireNextImage() }.getOrNull() ?: return
+        if (closed.get()) {
+            runCatching { image.close() }
+            return
+        }
+        var hb: HardwareBuffer? = null
+        var eglImg = 0L
+        try {
+            frameDiag?.frameStart()
+            makeCurrent(pbuffer)
+            applyRequestedLens()
+            hb = image.hardwareBuffer ?: return
+            eglImg = EglHardwareBufferBridge.createEglImage(hb)
+            if (eglImg == 0L) return
+            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
+            val bindErr = EglHardwareBufferBridge.bindExternalTexture(eglImg)
+            check(bindErr == 0) { "glEGLImageTargetTexture2DOES failed with 0x${bindErr.toString(16)}" }
+            frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.LATCH)
+            val sourceReceivedAtMs = android.os.SystemClock.elapsedRealtime()
+            IMAGE_READER_Y_FLIP_MATRIX.copyInto(textureMatrix)
+            if (frontFacing) unmirrorSurfaceTextureMatrix(textureMatrix)
+            val frameDataSpace = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) image.dataSpace else null
+            renderLatchedFrame(image.timestamp, frameDataSpace, sourceReceivedAtMs)
+        } catch (failure: Throwable) {
+            reportGlFailure(failure)
+        } finally {
+            if (pbuffer != EGL14.EGL_NO_SURFACE) makeCurrent(pbuffer)
+            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+            if (eglImg != 0L) EglHardwareBufferBridge.destroyEglImage(eglImg)
+            runCatching { hb?.close() }
+            runCatching { image.close() }
+        }
+    }
+
+    private fun renderLatchedFrame(
+        timestampNs: Long,
+        frameDataSpace: Int?,
+        sourceReceivedAtMs: Long,
+    ) {
+        lastSourceDataSpace = frameDataSpace
+        if (shaderYcbcr && (ycbcrConversion == null || ycbcrDataSpace != frameDataSpace)) {
+            ycbcrConversion = OpenCineLogYcbcrConversion.forDataSpace(frameDataSpace, sourcePath)
+            ycbcrDataSpace = frameDataSpace
+        }
+        viewfinderGapTrace?.onFrame(timestampNs, android.os.SystemClock.elapsedRealtimeNanos())
+        frameZoomCrop = zoomLagTimeline.cropFor(timestampNs, ZOOM_LAG_WAIT_NS)
+        viewfinderGapTrace?.onZoomCrop(timestampNs, frameZoomCrop, zoomLagTimeline.lastExact, zoomLagTimeline.lastWaitNs)
+        frameGain = if (appliedFrameGain) frameGainTimeline.cropFor(timestampNs, ZOOM_LAG_WAIT_NS) else 1f
+        appliedLens?.let { lens ->
+            val found = lensTimeline.lookup(timestampNs)
+            if (!found.exact) lensFallbackCounter.incrementAndGet()
+            frameLensLookup = found
+            frameLensEntry = lens.entryFor(found.physicalId)
+        }
+        recording?.takeIf { it.acceptFrames.get() && recordingFrameMeetsWhiteBalanceBoundary(timestampNs, it.minimumSensorTimestampNs) }?.let { active ->
+            active.noteSourceDataSpace(frameDataSpace, sourcePath)
+            if (active.ycbcrConversion == null) active.ycbcrConversion = ycbcrConversion?.label
+            val capturePts = active.captureEpoch?.mapVideoInput(timestampNs)
+            if (!active.videoRegressionLogged && (active.captureEpoch?.regressedVideoFrames() ?: 0L) > 0L) {
+                active.videoRegressionLogged = true
+                android.util.Log.w(LOG_TAG, "Camera timestamp regressed to $timestampNs ns; frame dropped (counted in sharedPause.regressedVideoFrames).")
+            }
+            if (!active.pauseStatusPublished && active.captureEpoch?.pauseAvailable() == true) active.reportPauseStatus()
+            val selectedPts = when {
+                active.timelapse != null -> active.timelapse.select(timestampNs)
+                active.projectTimeline != null -> active.projectTimeline.select(timestampNs)
+                else -> if (active.captureEpoch == null) timestampNs else capturePts
+            }
+            if (selectedPts != null && encoderEglSurface != EGL14.EGL_NO_SURFACE) {
+                frameDiag?.skip()
+                check(makeCurrent(encoderEglSurface)) { "Encoder EGL surface is unavailable." }
+                draw(
+                    outputMode = OUTPUT_OCLOG,
+                    width = active.geometry.encodedSize.width,
+                    height = active.geometry.encodedSize.height,
+                    previewOutput = false,
+                    recordingGeometry = active.geometry,
+                    recordingLut = active.recordingLut,
+                    hlgSignal = active.hlgOutput,
+                )
+                frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.ENCODER_DRAW)
+                frameLensLookup?.let { found -> active.lens?.record(found.physicalId, found.exact) }
+                active.exposureCompensation?.record(frameGain)
+                check(EGLExt.eglPresentationTimeANDROID(display, encoderEglSurface, selectedPts)) { "Encoder rejected presentation timestamp." }
+                check(EGL14.eglSwapBuffers(display, encoderEglSurface)) { "Encoder EGL swap failed." }
+                recordingFrameSequence++
+                frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.ENCODER_SWAP)
+                if (!active.recordedFrameListenerFailed) onRecordedFrame?.let { report ->
+                    try { report(timestampNs, selectedPts) } catch (problem: Exception) {
+                        active.recordedFrameListenerFailed = true
+                        android.util.Log.w(LOG_TAG, "Recorded frame listener failed; it is not called again for this take", problem)
+                    }
+                }
+                if (!active.firstFrameReported) {
+                    active.firstFrameReported = true
+                    onFirstRecordedFrame?.let { report ->
+                        try { report(timestampNs) } catch (problem: Exception) {
+                            android.util.Log.w(LOG_TAG, "First recorded frame listener failed", problem)
+                        }
+                    }
+                }
+                if (!active.lutApplied && active.recordingLut != null) {
+                    active.lutApplied = true
+                    active.onRecordingLutApplied?.invoke(requireNotNull(active.lutEvidence))
+                }
+                active.timelapse?.let { clock ->
+                    active.onTimelapseProgress?.invoke(TimelapseProgress(clock.selectedFrames, clock.missedIntervals, active.candidate.codecName, active.candidate.hardwareAccelerated))
+                }
+            }
+        }
+        frameDiag?.skip()
+        renderScopeAnalysisIfDue(timestampNs)
+        frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.SCOPES)
+        renderCalibrationReadbackIfDue(timestampNs)
+        subjectOutput?.let { output ->
+            check(makeCurrent(pbuffer)) { "Subject producer pbuffer is unavailable." }
+            output.render(sourceReceivedAtMs) { width, height, options ->
+                val geometry = OpenCineLogPreviewGeometryCalculator.calculate(
+                    sourceWidth = size.width, sourceHeight = size.height,
+                    targetWidth = width, targetHeight = height,
+                    sensorOrientationDegrees = sensorOrientationDegrees,
+                    displayRotationDegrees = options.displayRotationDegrees,
+                    frontFacing = frontFacing, squeezeFactor = options.squeezeFactor,
+                ).copy(mirrorHorizontally = options.mirror)
+                requireNotNull(draw(if (options.viewAssist) OUTPUT_VIEW_ASSIST else OUTPUT_FLAT_MONITOR,
+                    width, height, previewOutput = false, outputGeometry = geometry, subjectLutOutput = true))
+            }
+        }
+        val previewDivisor = researchEncoderOverride?.previewFpsDivisor
+            ?: if (hisiliconMain10Workaround && targetFps >= 60) 2 else 1
+        val recActive = recording?.acceptFrames?.get() == true
+        val shouldRenderPreview = when {
+            !recActive -> true
+            previewDivisor <= 0 -> false
+            previewDivisor == 1 -> true
+            else -> (recordingFrameSequence % previewDivisor.toLong()) == 0L
+        }
+        if (shouldRenderPreview && previewNativeSurface?.isValid == true && previewEglSurface != EGL14.EGL_NO_SURFACE) {
+            runCatching {
+                check(makeCurrent(previewEglSurface)) { "Preview EGL window is unavailable." }
+                val width = querySurface(EGL14.EGL_WIDTH).coerceAtLeast(1)
+                val height = querySurface(EGL14.EGL_HEIGHT).coerceAtLeast(1)
+                pendingOperatorLutStatus = null
+                frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.SUBJECT)
+                draw(if (viewAssistEnabled) OUTPUT_VIEW_ASSIST else OUTPUT_FLAT_MONITOR, width, height, previewOutput = true)
+                frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.PREVIEW_DRAW)
+                check(EGL14.eglSwapBuffers(display, previewEglSurface)) { "Preview EGL swap failed." }
+                frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.PREVIEW_SWAP)
+                pendingOperatorLutStatus?.let(::reportOperatorLut)
+            }.onFailure(::reportPreviewFailure)
+        }
+        frameDiag?.frameEnd(timestampNs, targetFps)
     }
 
     private fun renderScopeAnalysisIfDue(frameTimestampNs: Long) {
@@ -2178,7 +2258,7 @@ class OpenCineLogGpuPipeline(
     }
 
     private fun targetContextFor(surface: EGLSurface): EGLContext =
-        if (surface == previewEglSurface && !(active8BitRenderConfig && researchEncoderOverride?.singleContextWhen8Bit == true)) {
+        if (surface == previewEglSurface && !(active8BitRenderConfig && (hisiliconMain10Workaround || researchEncoderOverride?.singleContextWhen8Bit == true))) {
             previewContext
         } else {
             context
@@ -2272,9 +2352,12 @@ class OpenCineLogGpuPipeline(
                     retireSubjectOutput()
                     destroyPreviewSurface()
                     if (encoderEglSurface != EGL14.EGL_NO_SURFACE) check(EGL14.eglDestroySurface(display, encoderEglSurface))
+                    zeroCopyImageReader?.setOnImageAvailableListener(null, null)
+                    zeroCopyImageReader?.close()
                     surfaceTexture?.setOnFrameAvailableListener(null)
                     surfaceTexture?.release()
-                    inputSurface?.release()
+                    if (zeroCopyImageReader == null) inputSurface?.release()
+                    zeroCopyImageReader = null
                     calibrationListener = null
                     freeCalibrationReadback()
                     asyncPboScopeReader?.release()
@@ -2750,6 +2833,28 @@ class OpenCineLogGpuPipeline(
         private const val EGL_GL_COLORSPACE_BT2020_LINEAR_EXT = 0x333F
         private const val EGL_GL_COLORSPACE_BT2020_HLG_EXT = 0x3540
         private const val EGL_GL_COLORSPACE_BT2020_PQ_EXT = 0x3340
+        private const val EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
+        private const val EGL_CONTEXT_PRIORITY_HIGH_IMG = 0x3101
+        private val IMAGE_READER_Y_FLIP_MATRIX = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f,
+        )
+
+        private fun createZeroCopyImageReader(width: Int, height: Int): ImageReader =
+            ImageReader.newInstance(
+                width,
+                height,
+                ImageFormat.PRIVATE,
+                6,
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_VIDEO_ENCODE,
+            )
+
+        fun prefersZeroCopyVideoInput(size: Size, fps: Int): Boolean =
+            EglHardwareBufferBridge.loaded &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                findEncoder(size, fps)?.codecName?.let(::requiresExplicitHevcLevel) == true
 
         private fun hdrFormat(hdr10: Boolean) = if (hdr10) HdrVideoFormat.HDR10 else HdrVideoFormat.HLG
 
@@ -2792,9 +2897,11 @@ class OpenCineLogGpuPipeline(
             hlgOutput: Boolean,
             hasRecordingLut: Boolean,
             override: ResearchEncoderOverride?,
+            hisiliconMain10Workaround: Boolean = false,
         ): EglSurfacePolicy = EglSurfacePolicy(
-            use8BitConfig = passthroughSdr || (override?.forceEgl8BitForMain10 == true),
-            useBt2020Linear = !hlgOutput && !passthroughSdr && !hasRecordingLut && override?.omitEglBt2020ColorSpace != true,
+            use8BitConfig = passthroughSdr || (override?.forceEgl8BitForMain10 ?: hisiliconMain10Workaround),
+            useBt2020Linear = !hlgOutput && !passthroughSdr && !hasRecordingLut &&
+                !(override?.omitEglBt2020ColorSpace ?: (override == null && hisiliconMain10Workaround)),
             useHlgSurface = hlgOutput,
         )
 

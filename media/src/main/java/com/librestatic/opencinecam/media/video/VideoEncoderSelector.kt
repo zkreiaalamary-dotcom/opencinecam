@@ -161,7 +161,7 @@ fun platformSurfaceEncoders(): Sequence<SurfaceEncoderInfo> =
     MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.asSequence().map { it.asSurfaceEncoderInfo() }
 
 /** True for HiSilicon OMX HEVC encoders that fail configure when KEY_LEVEL is omitted alongside KEY_PROFILE. */
-internal fun requiresExplicitHevcLevel(codecName: String): Boolean = codecName.contains(".hisi.", ignoreCase = true)
+fun requiresExplicitHevcLevel(codecName: String): Boolean = codecName.contains(".hisi.", ignoreCase = true)
 
 class VideoEncoderSelector(private val correlationId: String = "video-encoder") {
     /**

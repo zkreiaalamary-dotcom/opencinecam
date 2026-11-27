@@ -64,6 +64,7 @@ data class Camera2LogProfile(
      * encoder advertises HEVC Main10 HDR10 ([Hdr10Video.isOffered]). Never set for the ISP-derived tier.
      */
     val hdr10: Boolean = false,
+    val huaweiCuvaHdr: Boolean = false,
     val qualificationStage: OpenCineLogQualificationStage = OpenCineLogQualificationStage.EXPERIMENTAL,
     val qualificationReason: String = OpenCineLogQualificationPolicy.NOT_RUN_REASON,
     val qualificationEvidenceId: String? = null,
@@ -1382,6 +1383,8 @@ class Camera2PreviewEngine(
                         onOperatorLutStatus = { status -> deliverGpuLutStatus(currentGeneration, { analysisPipeline }, status) },
                         onPreviewLost = { message -> listener.onPreviewSurfaceLost(message) },
                             greyReference = logGreyReference,
+                            useZeroCopyVideoImageReader = selectedLogProfile.huaweiCuvaHdr ||
+                                (requestedTargetFps >= 60 && OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(selectedLogProfile.size, requestedTargetFps)),
                         ) { code, message -> listener.onFailure(code, message, false) }
                     } catch (failure: Throwable) {
                         observeFailedInitialization(failure)
@@ -1400,6 +1403,8 @@ class Camera2PreviewEngine(
                         onAnalysis = { analysis -> deliverGpuAnalysis(currentGeneration, { analysisPipeline }, analysis) },
                         onOperatorLutStatus = { status -> deliverGpuLutStatus(currentGeneration, { analysisPipeline }, status) },
                         onPreviewLost = { message -> listener.onPreviewSurfaceLost(message) },
+                            useZeroCopyVideoImageReader = requestedTargetFps >= 60 &&
+                                OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(size, requestedTargetFps),
                             onFailure = { code, message -> listener.onFailure(code, message, true) })
                         passthroughVideoPipeline = true
                     } catch (failure: Throwable) {

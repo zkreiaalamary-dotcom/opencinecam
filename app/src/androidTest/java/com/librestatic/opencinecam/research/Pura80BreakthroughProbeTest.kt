@@ -9,6 +9,7 @@ import android.os.Process
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -65,5 +66,33 @@ class Pura80BreakthroughProbeTest {
     fun probe5_VendorByteBuffer10BitClips() {
         val report = LabBreakthroughProbes.runProbe5_VendorByteBuffer10BitClips(context, outDir)
         assertTrue("Expected non-empty probe5 arms: $report", (report.optJSONArray("arms")?.length() ?: 0) > 0)
+    }
+
+    @Test
+    fun probe6_ZeroCopy4k60GpuOcLog2() {
+        val report = LabBreakthroughProbes.runProbe6_ZeroCopy4k60GpuOcLog2(context, outDir)
+        assertTrue("Expected non-empty probe6 arms: $report", (report.optJSONArray("arms")?.length() ?: 0) > 0)
+    }
+
+    @Test
+    fun probe7_RawSensorStreamingRate() {
+        val report = LabBreakthroughProbes.runProbe7_RawSensorStreamingRate(context, outDir)
+        assertTrue("Expected non-empty probe7 arms: $report", (report.optJSONArray("arms")?.length() ?: 0) > 0)
+    }
+
+    @Test
+    fun probe8_ProductionPipelineSustained4k60And4k30() {
+        val report = LabBreakthroughProbes.runProbe8_ProductionPipelineVerification(context, outDir)
+        assertTrue("Expected Camera 0 supportsOpenCineLog: $report", report.optBoolean("supportsOpenCineLog", false))
+        assertTrue("Expected 4K60 CUVA profile: $report", report.optBoolean("has4k60CuvaProfile", false))
+        assertTrue("Expected 4K30 CUVA profile: $report", report.optBoolean("has4k30CuvaProfile", false))
+        assertTrue("Expected 4K60 video profile: $report", report.optBoolean("has4k60VideoProfile", false))
+        assertFalse("Unexpected untested >3840px 60fps LOG profile: $report", report.optBoolean("hasUntestedOpenGate4k60", true))
+        val arms = report.optJSONArray("arms")
+        assertTrue("Expected 2 production arms: $report", arms != null && arms.length() == 2)
+        for (i in 0 until arms!!.length()) {
+            val arm = arms.getJSONObject(i)
+            assertTrue("Production arm failed: $arm", arm.optBoolean("ok", false))
+        }
     }
 }

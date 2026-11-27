@@ -35,6 +35,7 @@ import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.opengl.GLES30
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -44,17 +45,22 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import androidx.annotation.RequiresApi
+import com.librestatic.opencinecam.camera.Camera2PreviewEngine
 import com.librestatic.opencinecam.camera.CaptureOwnerAdmission
 import com.librestatic.opencinecam.camera.HevcSpsInspector
+import com.librestatic.opencinecam.camera.HevcVuiTransfer
 import com.librestatic.opencinecam.camera.OpenCineLogGpuPipeline
+import com.librestatic.opencinecam.camera.OpenCineLogRecordingEvidence
 import com.librestatic.opencinecam.camera.OpenCineLogSourcePath
 import com.librestatic.opencinecam.camera.RecordingGeometryCalculator
 import com.librestatic.opencinecam.camera.RecordingGeometryMode
 import com.librestatic.opencinecam.camera.ResearchEncoderOverride
+import com.librestatic.opencinecam.media.video.EglHardwareBufferBridge
 import com.librestatic.opencinecam.media.video.HevcEncoderLevels
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
@@ -83,6 +89,9 @@ internal object LabBreakthroughProbes {
     private const val EGL_CONTEXT_PRIORITY_LEVEL_IMG = 0x3100
     private const val EGL_CONTEXT_PRIORITY_HIGH_IMG = 0x3101
     private const val EGL_RECORDABLE_ANDROID = 0x3142
+    private const val EGL_OPENGL_ES3_BIT_KHR = 0x0040
+    private const val EGL_GL_COLORSPACE_KHR = 0x309D
+    private const val EGL_GL_COLORSPACE_BT2020_LINEAR_EXT = 0x333F
     private const val GAP_THRESHOLD_60FPS_NS = 25_000_000L
 
     @RequiresApi(Build.VERSION_CODES.Q)
@@ -533,7 +542,9 @@ internal object LabBreakthroughProbes {
         val armSpecs = listOf(
             "2A_direct_4k30_cuva_off" to "cuva_direct_4k30_off.mp4",
             "2B_direct_4k30_cuva_on" to "cuva_direct_4k30_on.mp4",
-            "2C_direct_4k60_cuva_on" to "cuva_direct_4k60_on.mp4",
+            "2C1_direct_4k60_cuva_on_2target" to "cuva_direct_4k60_2target.mp4",
+            "2C2_direct_4k60_cuva_on_with_priv_vid" to "cuva_direct_4k60_priv_vid.mp4",
+            "2D_gpu_4k30_cuva_off" to "cuva_gpu_4k30_off.mp4",
             "2D_gpu_4k30_cuva_on" to "cuva_gpu_4k30_on.mp4",
         )
         for ((armName, fileName) in armSpecs) {
@@ -541,12 +552,22 @@ internal object LabBreakthroughProbes {
                 val temp = ensureCoolOrWait(context, checkBudget)
                 val outFile = File(outDir, fileName)
                 if (outFile.exists()) outFile.delete()
-                val jsonObj = if (armName == "2D_gpu_4k30_cuva_on") {
-                    runProbe2GpuArm(context, armName, outFile, lockedAe)
-                } else {
-                    val fps = if (armName.contains("4k60")) 60 else 30
-                    val cuvaOn = armName.endsWith("cuva_on")
-                    runProbe2DirectArm(context, armName, outFile, fps, cuvaOn, lockedAe)
+                val jsonObj = when {
+                    armName.startsWith("2D_gpu") -> {
+                        val cuvaOn = armName.endsWith("cuva_on")
+                        runProbe2GpuArm(context, armName, outFile, cuvaOn, lockedAe)
+                    }
+                    armName == "2C1_direct_4k60_cuva_on_2target" -> {
+                        runProbe2DirectArm(context, armName, outFile, 60, cuvaOn = true, lockedAe = null, includeCompanionReader = false, companionUsage = null)
+                    }
+                    armName == "2C2_direct_4k60_cuva_on_with_priv_vid" -> {
+                        runProbe2DirectArm(context, armName, outFile, 60, cuvaOn = true, lockedAe = null, includeCompanionReader = true, companionUsage = HardwareBuffer.USAGE_VIDEO_ENCODE)
+                    }
+                    else -> {
+                        val fps = if (armName.contains("4k60")) 60 else 30
+                        val cuvaOn = armName.endsWith("cuva_on")
+                        runProbe2DirectArm(context, armName, outFile, fps, cuvaOn, lockedAe, includeCompanionReader = true, companionUsage = null)
+                    }
                 }
                 jsonObj.put("batteryStartC", temp)
             } catch (t: Throwable) {
@@ -635,6 +656,8 @@ internal object LabBreakthroughProbes {
         fps: Int,
         cuvaOn: Boolean,
         lockedAe: Pair<Long, Int>?,
+        includeCompanionReader: Boolean = true,
+        companionUsage: Long? = null,
     ): JSONObject {
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
         lease.ready().get(8, TimeUnit.SECONDS)
@@ -678,24 +701,26 @@ internal object LabBreakthroughProbes {
         val stThread = HandlerThread("p2-st").apply { start() }
         val stHandler = Handler(stThread.looper)
 
-        val companionReader = ImageReader.newInstance(1280, 720, ImageFormat.PRIVATE, 3).apply {
-            setOnImageAvailableListener({ r ->
-                runCatching {
-                    r.acquireLatestImage()?.use { img ->
-                        if (companionHbFormat.get() == -1) {
-                            img.hardwareBuffer?.let { hb ->
-                                try {
-                                    companionHbFormat.compareAndSet(-1, hb.format)
-                                    companionHbUsage.compareAndSet(-1L, hb.usage)
-                                } finally {
-                                    hb.close()
+        val companionReader = if (includeCompanionReader) {
+            createUsageImageReader(1280, 720, ImageFormat.PRIVATE, 6, companionUsage).apply {
+                setOnImageAvailableListener({ r ->
+                    runCatching {
+                        r.acquireLatestImage()?.use { img ->
+                            if (companionHbFormat.get() == -1) {
+                                img.hardwareBuffer?.let { hb ->
+                                    try {
+                                        companionHbFormat.compareAndSet(-1, hb.format)
+                                        companionHbUsage.compareAndSet(-1L, hb.usage)
+                                    } finally {
+                                        hb.close()
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            }, camHandler)
-        }
+                }, camHandler)
+            }
+        } else null
 
         // Companion dummy GL SurfaceTexture when running 4K60 direct CUVA to match production 4K60 dual-stream recipe
         var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -782,7 +807,7 @@ internal object LabBreakthroughProbes {
 
             val targets = buildList {
                 add(requireNotNull(inputSurface))
-                add(companionReader.surface)
+                companionReader?.surface?.let { add(it) }
                 previewStSurface?.let { add(it) }
             }
 
@@ -883,7 +908,7 @@ internal object LabBreakthroughProbes {
             runCatching { inputSurface?.release() }
             if (muxerStarted) runCatching { muxer?.stop() }
             runCatching { muxer?.release() }
-            runCatching { companionReader.close() }
+            runCatching { companionReader?.close() }
             if (previewSt != null || previewStSurface != null || eglDisplay != EGL14.EGL_NO_DISPLAY) {
                 val glDone = CompletableFuture<Unit>()
                 stHandler.post {
@@ -914,6 +939,7 @@ internal object LabBreakthroughProbes {
         context: Context,
         armName: String,
         outFile: File,
+        cuvaOn: Boolean,
         lockedAe: Pair<Long, Int>?,
     ): JSONObject {
         val lease = CaptureOwnerAdmission.processGlobal.acquire()
@@ -927,9 +953,12 @@ internal object LabBreakthroughProbes {
         val sensorOrientation = caps.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
 
         val failureMsg = AtomicReference<String?>(null)
+        val refusedMsg = AtomicReference<String?>(null)
+        val fallbackMsg = AtomicReference<String?>(null)
+        val sourcePath = if (cuvaOn) OpenCineLogSourcePath.HLG10_BT2020 else OpenCineLogSourcePath.SDR_BT709_ISP
         val pipeline = OpenCineLogGpuPipeline(
             size = Size(3840, 2160),
-            sourcePath = OpenCineLogSourcePath.SDR_BT709_ISP,
+            sourcePath = sourcePath,
             preview = null,
             sensorOrientationDegrees = sensorOrientation,
             displayRotationDegrees = 0,
@@ -972,7 +1001,7 @@ internal object LabBreakthroughProbes {
         val cuvaAppliedFmt = AtomicReference<String?>(null)
         val cuvaObservedRes = AtomicReference<String?>(null)
         val started = CountDownLatch(1)
-        val stopped = CompletableFuture<Pair<Boolean, String?>>()
+        val stopped = CompletableFuture<Pair<Boolean, OpenCineLogRecordingEvidence?>>()
         var session: CameraCaptureSession? = null
         var openSubmitted = false
         var pfd: ParcelFileDescriptor? = null
@@ -997,7 +1026,7 @@ internal object LabBreakthroughProbes {
                 } else {
                     b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
                 }
-                if (cuvaReqKey != null) {
+                if (cuvaOn && cuvaReqKey != null) {
                     cuvaAppliedFmt.compareAndSet(null, setVendorByteOrIntKey(b, cuvaReqKey, 1, cuvaHint))
                 }
             }
@@ -1021,43 +1050,59 @@ internal object LabBreakthroughProbes {
                 }
             }, camHandler)
 
-            Thread.sleep(400L)
+            Thread.sleep(600L)
             pfd = ParcelFileDescriptor.open(outFile, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_TRUNCATE)
             val geometry = RecordingGeometryCalculator.calculate(
                 sourceSize = Size(3840, 2160),
                 sensorOrientationDegrees = sensorOrientation,
                 deviceOrientationDegrees = 0,
                 lensFacing = CameraCharacteristics.LENS_FACING_BACK,
-                mode = RecordingGeometryMode.COMPATIBLE,
+                mode = RecordingGeometryMode.NATIVE_RASTER,
             )
             val recCalled = pipeline.startRecording(
                 output = pfd,
                 bitrate = 60_000_000,
                 geometry = geometry,
                 onStarted = { started.countDown() },
-                onStopped = { ok, ev -> stopped.complete(ok to ev?.codecName) },
+                onStopped = { ok, ev -> stopped.complete(ok to ev) },
+                onCodecFallback = { reason -> fallbackMsg.compareAndSet(null, reason) },
+                onStartRefused = { code, msg -> refusedMsg.compareAndSet(null, "$code: $msg") },
                 hlgOutput = false,
                 hdr10Output = false,
             )
-            if (recCalled && started.await(4, TimeUnit.SECONDS)) {
+            val startedOk = recCalled && started.await(4, TimeUnit.SECONDS)
+            if (startedOk) {
                 Thread.sleep(2_800L)
                 pipeline.stopRecording()
-                runCatching { stopped.get(6, TimeUnit.SECONDS) }
             }
+            val stopPair = runCatching { stopped.get(8, TimeUnit.SECONDS) }.getOrNull()
+            runCatching { pipeline.recordingFileRetirement().get(6, TimeUnit.SECONDS) }
             runCatching { session.stopRepeating() }
 
+            val ev = stopPair?.second
             val fileMetrics = inspectWrittenMp4(outFile)
             val diag = pipeline.frameDiagnosticsSnapshot()
             json(
                 "arm" to armName,
-                "ok" to (recCalled && outFile.length() > 1024L && failureMsg.get() == null),
+                "ok" to (startedOk && stopPair?.first == true && outFile.length() > 1024L && failureMsg.get() == null && refusedMsg.get() == null),
                 "clip" to outFile.name,
                 "clipBytes" to outFile.length(),
+                "sourcePath" to sourcePath.name,
+                "cuvaRequested" to cuvaOn,
                 "cuvaAppliedFmt" to cuvaAppliedFmt.get(),
                 "cuvaObservedRes" to cuvaObservedRes.get(),
                 "companionHwBufferFormat" to companionHbFormat.get().takeIf { it != -1 },
                 "companionHwBufferFormatHex" to companionHbFormat.get().takeIf { it != -1 }?.let { "0x${it.toString(16)}" },
+                "recCalled" to recCalled,
+                "startedOk" to startedOk,
+                "stoppedOk" to stopPair?.first,
+                "startRefused" to refusedMsg.get(),
+                "codecFallback" to fallbackMsg.get(),
                 "pipelineFailure" to failureMsg.get(),
+                "encodedFrames" to ev?.encodedProgress?.frameCount,
+                "sourceDataSpace" to ev?.sourceDataSpace,
+                "dataSpaceMismatchedFrames" to ev?.sourceDataSpaceMismatchedFrames,
+                "unexpectedSourceDataSpace" to ev?.unexpectedSourceDataSpace,
                 "gpuRenderFrames" to diag?.totalFrames,
                 "gpuRenderGaps" to diag?.totalGaps,
                 "fileStats" to fileMetrics,
@@ -1628,11 +1673,6 @@ internal object LabBreakthroughProbes {
                             val buf = codec.getInputBuffer(inIdx)
                             val cap = buf?.capacity() ?: 0
                             inputCapObserved.compareAndSet(-1, cap)
-                            if (inputImgFormatObserved.get() == -1) {
-                                runCatching {
-                                    codec.getInputImage(inIdx)?.use { img -> inputImgFormatObserved.compareAndSet(-1, img.format) }
-                                }
-                            }
                             if (buf == null || cap == 0) {
                                 throw IllegalStateException("Null/empty encoder input buffer")
                             }
@@ -1733,6 +1773,915 @@ internal object LabBreakthroughProbes {
                 }
                 out
             }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Probe 6: Zero-Copy ImageReader(GPU|VIDEO_ENCODE) -> HardwareBuffer -> EGLImage -> OCLog2
+    // -------------------------------------------------------------------------
+    fun runProbe6_ZeroCopy4k60GpuOcLog2(
+        context: Context,
+        outDir: File,
+        checkBudget: () -> Unit = {},
+    ): JSONObject {
+        outDir.mkdirs()
+        val bridgeLoaded = EglHardwareBufferBridge.loaded
+        val armSpecs = listOf(
+            "6A_zerocopy_4k60_oclog2_sdr" to "zc_4k60_oclog2_sdr.mp4",
+            "6B_zerocopy_4k60_oclog2_gamma20" to "zc_4k60_oclog2_gamma20.mp4",
+            "6C_zerocopy_4k60_oclog2_cuva" to "zc_4k60_oclog2_cuva.mp4",
+            "6D_zerocopy_4k30_oclog2_cuva" to "zc_4k30_oclog2_cuva.mp4",
+        )
+        val arms = JSONArray()
+        for ((armName, fileName) in armSpecs) {
+            val res = try {
+                val temp = ensureCoolOrWait(context, checkBudget)
+                val outFile = File(outDir, fileName)
+                if (outFile.exists()) outFile.delete()
+                val fps = if (armName.contains("4k30")) 30 else 60
+                val cuvaOn = armName.endsWith("_cuva")
+                val gamma20 = armName.contains("gamma20")
+                runProbe6Arm(context, armName, outFile, fps, cuvaOn, gamma20).put("batteryStartC", temp)
+            } catch (t: Throwable) {
+                json(
+                    "arm" to armName,
+                    "ok" to false,
+                    "errorClass" to t.javaClass.name,
+                    "error" to (t.message ?: t.toString()).take(300),
+                )
+            }
+            arms.put(res)
+        }
+        return saveProbeJson(outDir, "probe6_zerocopy_4k60_oclog2.json", json(
+            "probe" to "Probe6_ZeroCopy4k60GpuOcLog2",
+            "bridgeLoaded" to bridgeLoaded,
+            "batteryEndC" to batteryTempC(context),
+            "arms" to arms,
+        ))
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun runProbe6Arm(
+        context: Context,
+        armName: String,
+        outFile: File,
+        fps: Int,
+        cuvaOn: Boolean,
+        gamma20: Boolean,
+    ): JSONObject {
+        check(EglHardwareBufferBridge.loaded) { "libocc_egl_hwbuffer.so failed to load" }
+        val lease = CaptureOwnerAdmission.processGlobal.acquire()
+        lease.ready().get(8, TimeUnit.SECONDS)
+        val manager = context.getSystemService(CameraManager::class.java)
+        val caps = manager.getCameraCharacteristics("0")
+        val cuvaReqKey = findVendorRequestKey(caps, "cuvaStateVideoMode")
+        val cuvaResKey = findVendorResultKey(caps, "cuvaStateVideoMode")
+        val cuvaHint = vendorKeyTypeHint(cuvaReqKey)
+        val toneMapModes = caps.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)?.toSet().orEmpty()
+
+        val sourcePath = if (cuvaOn) OpenCineLogSourcePath.HLG10_BT2020 else OpenCineLogSourcePath.SDR_BT709_ISP
+        val w = 3840
+        val h = 2160
+        val codecName = selectHevcEncoderName()
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_HEVC, w, h).apply {
+            setInteger(MediaFormat.KEY_PROFILE, CodecProfileLevel.HEVCProfileMain10)
+            setInteger(MediaFormat.KEY_LEVEL, CodecProfileLevel.HEVCMainTierLevel62)
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, if (fps >= 60) 80_000_000 else 60_000_000)
+            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            setInteger(MediaFormat.KEY_PRIORITY, 0)
+            setInteger(MediaFormat.KEY_OPERATING_RATE, fps)
+            setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
+            setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_FULL)
+        }
+        val codec = MediaCodec.createByCodecName(codecName)
+        var inputSurface: Surface? = null
+        var muxer: MediaMuxer? = null
+        var codecStarted = false
+        var muxerStarted = false
+        var drainThread: Thread? = null
+        val csd0Ref = AtomicReference<ByteArray?>(null)
+        val encodedSamples = AtomicInteger(0)
+
+        val camThread = HandlerThread("p6-cam").apply { start() }
+        val camHandler = Handler(camThread.looper)
+        val executor = Executor { r -> camHandler.post(r) }
+        val glThread = HandlerThread("p6-gl").apply { start() }
+        val glHandler = Handler(glThread.looper)
+
+        var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+        var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+        var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+        var texId = 0
+        var program = 0
+        var extMask = 0
+        var eglColorBits = 8
+        var bt2020SurfaceAccepted = false
+        var prioHex: String? = null
+
+        val closing = AtomicBoolean(false)
+        val camTimestamps = mutableListOf<Long>()
+        val glTimestamps = mutableListOf<Long>()
+        val renderTimesMs = mutableListOf<Double>()
+        val eglCreateOk = AtomicInteger(0)
+        val eglCreateFail = AtomicInteger(0)
+        val glErrors = AtomicInteger(0)
+        val lastEglErr = AtomicInteger(0)
+        val hbFormat = AtomicInteger(-1)
+        val hbUsage = AtomicLong(-1L)
+        val cuvaAppliedFmt = AtomicReference<String?>(null)
+        val cuvaObservedRes = AtomicReference<String?>(null)
+        val toneMapApplied = AtomicBoolean(false)
+
+        val reader = createUsageImageReader(
+            w, h, ImageFormat.PRIVATE, 6,
+            HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_VIDEO_ENCODE,
+        )
+
+        val opened = CompletableFuture<CameraDevice>()
+        val closed = CompletableFuture<Unit>()
+        val configured = CompletableFuture<CameraCaptureSession>()
+        val retiring = AtomicBoolean(false)
+        var session: CameraCaptureSession? = null
+        var openSubmitted = false
+
+        return try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            inputSurface = codec.createInputSurface()
+            muxer = MediaMuxer(outFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            codec.start()
+            codecStarted = true
+
+            val drainStop = AtomicBoolean(false)
+            drainThread = Thread({
+                val info = MediaCodec.BufferInfo()
+                var trackIdx = -1
+                while (!drainStop.get()) {
+                    val outIdx = runCatching { codec.dequeueOutputBuffer(info, 10_000L) }.getOrDefault(-99)
+                    if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        val of = codec.outputFormat
+                        of.getByteBuffer("csd-0")?.let { bb ->
+                            val raw = ByteArray(bb.remaining()).also { bb.duplicate().get(it) }
+                            val fixed = runCatching { HevcVuiTransfer.rewrite(raw, HevcVuiTransfer.UNSPECIFIED).bytes }.getOrDefault(raw)
+                            csd0Ref.compareAndSet(null, fixed)
+                            of.setByteBuffer("csd-0", ByteBuffer.wrap(fixed))
+                        }
+                        if (!muxerStarted) {
+                            trackIdx = muxer.addTrack(of)
+                            muxer.start()
+                            muxerStarted = true
+                        }
+                    } else if (outIdx >= 0) {
+                        val buf = codec.getOutputBuffer(outIdx)
+                        if (buf != null && info.size > 0 && muxerStarted && (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                            buf.position(info.offset)
+                            buf.limit(info.offset + info.size)
+                            val payload = if ((info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
+                                val bytes = ByteArray(info.size)
+                                buf.get(bytes)
+                                val rw = runCatching { HevcVuiTransfer.rewrite(bytes, HevcVuiTransfer.UNSPECIFIED).bytes }.getOrDefault(bytes)
+                                info.offset = 0
+                                info.size = rw.size
+                                ByteBuffer.wrap(rw)
+                            } else buf
+                            muxer.writeSampleData(trackIdx, payload, info)
+                            encodedSamples.incrementAndGet()
+                        }
+                        codec.releaseOutputBuffer(outIdx, false)
+                        if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
+                    } else if (outIdx == -99) {
+                        break
+                    }
+                }
+            }, "p6-drain").apply { start() }
+
+            var quadBuffer: FloatBuffer? = null
+            var uTexLoc = -1
+            var uOutModeLoc = -1
+            var uGainLoc = -1
+
+            val glInitFuture = CompletableFuture<Unit>()
+            glHandler.post {
+                runCatching {
+                    eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+                    val ver = IntArray(2)
+                    check(EGL14.eglInitialize(eglDisplay, ver, 0, ver, 1)) { "eglInitialize failed" }
+
+                    val cfg10Attr = intArrayOf(
+                        EGL14.EGL_RED_SIZE, 10,
+                        EGL14.EGL_GREEN_SIZE, 10,
+                        EGL14.EGL_BLUE_SIZE, 10,
+                        EGL14.EGL_ALPHA_SIZE, 2,
+                        EGL14.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR,
+                        EGL_RECORDABLE_ANDROID, 1,
+                        EGL14.EGL_NONE,
+                    )
+                    val cfg8Attr = intArrayOf(
+                        EGL14.EGL_RED_SIZE, 8,
+                        EGL14.EGL_GREEN_SIZE, 8,
+                        EGL14.EGL_BLUE_SIZE, 8,
+                        EGL14.EGL_ALPHA_SIZE, 8,
+                        EGL14.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT_KHR,
+                        EGL_RECORDABLE_ANDROID, 1,
+                        EGL14.EGL_NONE,
+                    )
+                    val cfgs = arrayOfNulls<EGLConfig>(1)
+                    val num = IntArray(1)
+                    var chosenCfg: EGLConfig? = null
+                    if (EGL14.eglChooseConfig(eglDisplay, cfg10Attr, 0, cfgs, 0, 1, num, 0) && num[0] > 0 && cfgs[0] != null) {
+                        val s10 = runCatching {
+                            EGL14.eglCreateWindowSurface(
+                                eglDisplay, cfgs[0], inputSurface,
+                                intArrayOf(EGL_GL_COLORSPACE_KHR, EGL_GL_COLORSPACE_BT2020_LINEAR_EXT, EGL14.EGL_NONE), 0,
+                            )
+                        }.getOrDefault(EGL14.EGL_NO_SURFACE)
+                        if (s10 != EGL14.EGL_NO_SURFACE) {
+                            chosenCfg = cfgs[0]
+                            eglSurface = s10
+                            eglColorBits = 10
+                            bt2020SurfaceAccepted = true
+                        } else {
+                            val s10plain = EGL14.eglCreateWindowSurface(eglDisplay, cfgs[0], inputSurface, intArrayOf(EGL14.EGL_NONE), 0)
+                            if (s10plain != EGL14.EGL_NO_SURFACE) {
+                                chosenCfg = cfgs[0]
+                                eglSurface = s10plain
+                                eglColorBits = 10
+                            }
+                        }
+                    }
+                    if (chosenCfg == null) {
+                        check(EGL14.eglChooseConfig(eglDisplay, cfg8Attr, 0, cfgs, 0, 1, num, 0) && num[0] > 0 && cfgs[0] != null) {
+                            "eglChooseConfig 8-bit failed"
+                        }
+                        chosenCfg = cfgs[0]
+                        eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, chosenCfg, inputSurface, intArrayOf(EGL14.EGL_NONE), 0)
+                        check(eglSurface != EGL14.EGL_NO_SURFACE) { "eglCreateWindowSurface 8-bit failed" }
+                        eglColorBits = 8
+                    }
+                    eglContext = EGL14.eglCreateContext(
+                        eglDisplay, chosenCfg, EGL14.EGL_NO_CONTEXT,
+                        intArrayOf(
+                            EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
+                            EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_HIGH_IMG,
+                            EGL14.EGL_NONE,
+                        ),
+                        0,
+                    )
+                    if (eglContext == EGL14.EGL_NO_CONTEXT) {
+                        eglContext = EGL14.eglCreateContext(
+                            eglDisplay, chosenCfg, EGL14.EGL_NO_CONTEXT,
+                            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0,
+                        )
+                    }
+                    check(eglContext != EGL14.EGL_NO_CONTEXT) { "eglCreateContext failed" }
+                    check(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) { "eglMakeCurrent failed" }
+                    val pq = IntArray(1)
+                    if (EGL14.eglQueryContext(eglDisplay, eglContext, EGL_CONTEXT_PRIORITY_LEVEL_IMG, pq, 0)) {
+                        prioHex = "0x${pq[0].toString(16)}"
+                    }
+                    extMask = EglHardwareBufferBridge.probeExtensions()
+                    check(extMask == 15) { "Missing EGLImage extensions mask=$extMask" }
+
+                    val texs = IntArray(1)
+                    GLES20.glGenTextures(1, texs, 0)
+                    texId = texs[0]
+
+                    val vsh = """
+                        #version 300 es
+                        layout(location = 0) in vec2 aPosition;
+                        out vec2 vTexCoord;
+                        void main() {
+                            gl_Position = vec4(aPosition, 0.0, 1.0);
+                            vTexCoord = (aPosition + 1.0) * 0.5;
+                        }
+                    """.trimIndent()
+                    val fsh = OpenCineLogGpuPipeline.transformShader(sourcePath, shaderYcbcr = false)
+                    program = compileGlProgram(vsh, fsh)
+                    GLES20.glUseProgram(program)
+                    uTexLoc = GLES20.glGetUniformLocation(program, "uTexture")
+                    uOutModeLoc = GLES20.glGetUniformLocation(program, "uOutputMode")
+                    uGainLoc = GLES20.glGetUniformLocation(program, "uSceneGain")
+
+                    val coords = floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
+                    quadBuffer = ByteBuffer.allocateDirect(coords.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                        put(coords)
+                        position(0)
+                    }
+                }.onSuccess { glInitFuture.complete(Unit) }.onFailure { glInitFuture.completeExceptionally(it) }
+            }
+            glInitFuture.get(6, TimeUnit.SECONDS)
+
+            reader.setOnImageAvailableListener({ r ->
+                val img = runCatching { r.acquireNextImage() }.getOrNull() ?: return@setOnImageAvailableListener
+                if (closing.get()) {
+                    runCatching { img.close() }
+                    return@setOnImageAvailableListener
+                }
+                val ts = img.timestamp
+                var hb: android.hardware.HardwareBuffer? = null
+                var eglImg = 0L
+                val t0 = System.nanoTime()
+                try {
+                    hb = img.hardwareBuffer
+                    if (hb != null) {
+                        if (hbFormat.get() == -1) {
+                            hbFormat.compareAndSet(-1, hb.format)
+                            hbUsage.compareAndSet(-1L, hb.usage)
+                        }
+                        eglImg = EglHardwareBufferBridge.createEglImage(hb)
+                        if (eglImg == 0L) {
+                            eglCreateFail.incrementAndGet()
+                            lastEglErr.compareAndSet(0, EglHardwareBufferBridge.lastEglError())
+                        } else {
+                            eglCreateOk.incrementAndGet()
+                            GLES20.glViewport(0, 0, w, h)
+                            GLES20.glUseProgram(program)
+                            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+                            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                            val bindErr = EglHardwareBufferBridge.bindExternalTexture(eglImg)
+                            if (bindErr != 0) glErrors.incrementAndGet()
+                            GLES20.glUniform1i(uTexLoc, 0)
+                            GLES20.glUniform1i(uOutModeLoc, 0)
+                            GLES20.glUniform1f(uGainLoc, 1.0f)
+                            GLES20.glEnableVertexAttribArray(0)
+                            quadBuffer?.position(0)
+                            GLES20.glVertexAttribPointer(0, 2, GLES20.GL_FLOAT, false, 0, quadBuffer)
+                            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                            GLES20.glDisableVertexAttribArray(0)
+                            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ts)
+                            EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+                            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+                            val dtMs = (System.nanoTime() - t0) / 1_000_000.0
+                            synchronized(glTimestamps) { glTimestamps += ts }
+                            synchronized(renderTimesMs) { renderTimesMs += dtMs }
+                        }
+                    }
+                } finally {
+                    if (eglImg != 0L) EglHardwareBufferBridge.destroyEglImage(eglImg)
+                    runCatching { hb?.close() }
+                    runCatching { img.close() }
+                }
+            }, glHandler)
+
+            manager.openCamera("0", object : CameraDevice.StateCallback() {
+                override fun onOpened(c: CameraDevice) { opened.complete(c); if (retiring.get()) c.close() }
+                override fun onDisconnected(c: CameraDevice) { opened.completeExceptionally(IllegalStateException("Disconnected")); c.close() }
+                override fun onError(c: CameraDevice, e: Int) { opened.completeExceptionally(IllegalStateException("Error $e")); c.close() }
+                override fun onClosed(c: CameraDevice) { closed.complete(Unit) }
+            }, camHandler)
+            openSubmitted = true
+            val cam = opened.get(6, TimeUnit.SECONDS)
+
+            fun applyKeys(b: CaptureRequest.Builder) {
+                b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                if (gamma20 && CaptureRequest.TONEMAP_MODE_GAMMA_VALUE in toneMapModes) {
+                    b.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_GAMMA_VALUE)
+                    b.set(CaptureRequest.TONEMAP_GAMMA, 2.0f)
+                    toneMapApplied.set(true)
+                }
+                if (cuvaOn && cuvaReqKey != null) {
+                    cuvaAppliedFmt.compareAndSet(null, setVendorByteOrIntKey(b, cuvaReqKey, 1, cuvaHint))
+                }
+            }
+
+            val targets = listOf(reader.surface)
+            val sessReq = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply { targets.forEach(::addTarget); applyKeys(this) }.build()
+            cam.createCaptureSession(
+                SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    targets.map { OutputConfiguration(it) },
+                    executor,
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(s: CameraCaptureSession) { if (retiring.get()) s.close() else configured.complete(s) }
+                        override fun onConfigureFailed(s: CameraCaptureSession) { configured.completeExceptionally(IllegalStateException("Configure failed")); s.close() }
+                    },
+                ).apply { sessionParameters = sessReq },
+            )
+            session = configured.get(6, TimeUnit.SECONDS)
+            val repReq = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply { targets.forEach(::addTarget); applyKeys(this) }.build()
+            session.setRepeatingRequest(repReq, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(s: CameraCaptureSession, req: CaptureRequest, res: TotalCaptureResult) {
+                    res.get(CaptureResult.SENSOR_TIMESTAMP)?.let { synchronized(camTimestamps) { camTimestamps += it } }
+                    if (cuvaObservedRes.get() == null) readResultKeyValue(res, cuvaResKey)?.let { cuvaObservedRes.compareAndSet(null, it) }
+                }
+            }, camHandler)
+
+            Thread.sleep(3_500L)
+            closing.set(true)
+            runCatching { session.stopRepeating() }
+            runCatching { codec.signalEndOfInputStream() }
+            drainThread.join(4_000L)
+            drainStop.set(true)
+            drainThread.join(1_000L)
+            if (muxerStarted) runCatching { muxer.stop() }
+            muxerStarted = false
+
+            val gapThresh = if (fps >= 60) 25_000_000L else 45_000_000L
+            val camMetrics = synchronized(camTimestamps) { computeTimestampMetrics(camTimestamps.toList(), gapThresh) }
+            val glMetrics = synchronized(glTimestamps) { computeTimestampMetrics(glTimestamps.toList(), gapThresh) }
+            val rTimes = synchronized(renderTimesMs) { renderTimesMs.sorted() }
+            val fileMetrics = inspectWrittenMp4(outFile)
+            val sps = csd0Ref.get()?.let { HevcSpsInspector.inspect(it) }
+            json(
+                "arm" to armName,
+                "ok" to (encodedSamples.get() > 20 && glMetrics.frames > 20 && outFile.length() > 1024L && eglCreateOk.get() > 0),
+                "clip" to outFile.name,
+                "clipBytes" to outFile.length(),
+                "sourcePath" to sourcePath.name,
+                "eglColorBits" to eglColorBits,
+                "bt2020LinearSurface" to bt2020SurfaceAccepted,
+                "eglPriorityHex" to prioHex,
+                "extMask" to extMask,
+                "hwBufferFormat" to hbFormat.get().takeIf { it != -1 },
+                "hwBufferFormatHex" to hbFormat.get().takeIf { it != -1 }?.let { "0x${it.toString(16)}" },
+                "hwBufferUsageHex" to hbUsage.get().takeIf { it != -1L }?.let { "0x${it.toString(16)}" },
+                "cuvaRequested" to cuvaOn,
+                "cuvaAppliedFmt" to cuvaAppliedFmt.get(),
+                "cuvaObservedRes" to cuvaObservedRes.get(),
+                "gamma20Applied" to toneMapApplied.get(),
+                "eglCreateOk" to eglCreateOk.get(),
+                "eglCreateFail" to eglCreateFail.get(),
+                "lastEglErrHex" to lastEglErr.get().takeIf { it != 0 }?.let { "0x${it.toString(16)}" },
+                "glErrors" to glErrors.get(),
+                "renderMsP50" to rTimes.getOrNull(rTimes.size / 2),
+                "renderMsP95" to rTimes.getOrNull((rTimes.size * 95 / 100).coerceAtMost((rTimes.size - 1).coerceAtLeast(0))),
+                "renderMsMax" to rTimes.lastOrNull(),
+                "camCb" to camMetrics.toJson(),
+                "glRendered" to glMetrics.toJson(),
+                "encodedSamples" to encodedSamples.get(),
+                "spsBitDepthLuma" to sps?.bitDepthLuma,
+                "fileStats" to fileMetrics,
+            )
+        } finally {
+            closing.set(true)
+            retiring.set(true)
+            val cc = closed.thenApply { Unit }
+            lease.releaseAfter(cc)
+            if (openSubmitted) {
+                camHandler.post { try { session?.close() } finally { if (!opened.isCompletedExceptionally) opened.getNow(null)?.close() } }
+            } else closed.complete(Unit)
+            runCatching { cc.get(6, TimeUnit.SECONDS) }
+            runCatching { reader.close() }
+            if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                val glDone = CompletableFuture<Unit>()
+                glHandler.post {
+                    if (program != 0) runCatching { GLES20.glDeleteProgram(program) }
+                    if (texId != 0) runCatching { GLES20.glDeleteTextures(1, intArrayOf(texId), 0) }
+                    runCatching {
+                        EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+                        if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                        if (eglContext != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(eglDisplay, eglContext)
+                        EGL14.eglTerminate(eglDisplay)
+                    }
+                    glDone.complete(Unit)
+                }
+                runCatching { glDone.get(4, TimeUnit.SECONDS) }
+            }
+            if (codecStarted) runCatching { codec.stop() }
+            runCatching { codec.release() }
+            runCatching { inputSurface?.release() }
+            if (muxerStarted) runCatching { muxer?.stop() }
+            runCatching { muxer?.release() }
+            camThread.quitSafely()
+            glThread.quitSafely()
+            runCatching { camThread.join(4_000) }
+            runCatching { glThread.join(4_000) }
+        }
+    }
+
+    private fun compileGlProgram(vsh: String, fsh: String): Int {
+        fun compile(type: Int, src: String): Int {
+            val s = GLES20.glCreateShader(type)
+            GLES20.glShaderSource(s, src)
+            GLES20.glCompileShader(s)
+            val status = IntArray(1)
+            GLES20.glGetShaderiv(s, GLES20.GL_COMPILE_STATUS, status, 0)
+            check(status[0] == GLES20.GL_TRUE) { "Shader compile failed: ${GLES20.glGetShaderInfoLog(s)}" }
+            return s
+        }
+        val vs = compile(GLES20.GL_VERTEX_SHADER, vsh)
+        val fs = compile(GLES20.GL_FRAGMENT_SHADER, fsh)
+        val p = GLES20.glCreateProgram()
+        GLES20.glAttachShader(p, vs)
+        GLES20.glAttachShader(p, fs)
+        GLES20.glLinkProgram(p)
+        val status = IntArray(1)
+        GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, status, 0)
+        check(status[0] == GLES20.GL_TRUE) { "Program link failed: ${GLES20.glGetProgramInfoLog(p)}" }
+        GLES20.glDeleteShader(vs)
+        GLES20.glDeleteShader(fs)
+        return p
+    }
+
+    // -------------------------------------------------------------------------
+    // Probe 7: Continuous 4000x3000 RAW_SENSOR (32) Repeating-Request Rate
+    // -------------------------------------------------------------------------
+    fun runProbe7_RawSensorStreamingRate(
+        context: Context,
+        outDir: File,
+        checkBudget: () -> Unit = {},
+    ): JSONObject {
+        val arms = JSONArray()
+        for (fps in listOf(30, 24)) {
+            val res = try {
+                val temp = ensureCoolOrWait(context, checkBudget)
+                runProbe7Arm(context, fps).put("batteryStartC", temp)
+            } catch (t: Throwable) {
+                json(
+                    "fps" to fps,
+                    "ok" to false,
+                    "errorClass" to t.javaClass.name,
+                    "error" to (t.message ?: t.toString()).take(300),
+                )
+            }
+            arms.put(res)
+        }
+        return saveProbeJson(outDir, "probe7_raw_streaming.json", json(
+            "probe" to "Probe7_RawSensorStreamingRate",
+            "batteryEndC" to batteryTempC(context),
+            "arms" to arms,
+        ))
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun runProbe7Arm(context: Context, fps: Int): JSONObject {
+        val lease = CaptureOwnerAdmission.processGlobal.acquire()
+        lease.ready().get(8, TimeUnit.SECONDS)
+        val manager = context.getSystemService(CameraManager::class.java)
+        val caps = manager.getCameraCharacteristics("0")
+        val whiteLevel = caps.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+        val blackPattern = caps.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let { p ->
+            val arr = IntArray(4)
+            p.copyTo(arr, 0)
+            arr.toList()
+        }
+
+        val thread = HandlerThread("p7-raw").apply { start() }
+        val handler = Handler(thread.looper)
+        val executor = Executor { r -> handler.post(r) }
+        val rawReader = ImageReader.newInstance(4000, 3000, ImageFormat.RAW_SENSOR, 6)
+        val previewReader = ImageReader.newInstance(1280, 720, ImageFormat.YUV_420_888, 3)
+
+        val camTimestamps = mutableListOf<Long>()
+        val rawTimestamps = mutableListOf<Long>()
+        val pixelStats = AtomicReference<JSONObject?>(null)
+
+        rawReader.setOnImageAvailableListener({ r ->
+            runCatching {
+                r.acquireNextImage()?.use { img ->
+                    synchronized(rawTimestamps) { rawTimestamps += img.timestamp }
+                    if (pixelStats.get() == null && rawTimestamps.size >= 5) {
+                        val plane = img.planes.firstOrNull()
+                        val buf = plane?.buffer?.duplicate()?.order(ByteOrder.LITTLE_ENDIAN)
+                        if (buf != null && buf.remaining() >= 4096) {
+                            val samples = IntArray(2048)
+                            val cap = buf.remaining() / 2
+                            val step = (cap / 2048).coerceAtLeast(1)
+                            var minV = 65535
+                            var maxV = 0
+                            var nonZero = 0
+                            for (i in samples.indices) {
+                                val v = buf.getShort((i * step) * 2).toInt() and 0xFFFF
+                                samples[i] = v
+                                if (v < minV) minV = v
+                                if (v > maxV) maxV = v
+                                if (v != 0) nonZero++
+                            }
+                            samples.sort()
+                            val inferredAdcBits = when {
+                                maxV <= 1023 -> 10
+                                maxV <= 4095 -> 12
+                                maxV <= 16383 -> 14
+                                else -> 16
+                            }
+                            pixelStats.set(json(
+                                "rowStride" to plane.rowStride,
+                                "pixelStride" to plane.pixelStride,
+                                "min" to minV,
+                                "p01" to samples[(samples.size * 1 / 100)],
+                                "p50" to samples[samples.size / 2],
+                                "p99" to samples[(samples.size * 99 / 100)],
+                                "max" to maxV,
+                                "nonZeroSamples" to nonZero,
+                                "inferredAdcBits" to inferredAdcBits,
+                            ))
+                        }
+                    }
+                }
+            }
+        }, handler)
+        previewReader.setOnImageAvailableListener({ r -> runCatching { r.acquireLatestImage()?.close() } }, handler)
+
+        val opened = CompletableFuture<CameraDevice>()
+        val closed = CompletableFuture<Unit>()
+        val configured = CompletableFuture<CameraCaptureSession>()
+        val retiring = AtomicBoolean()
+        var session: CameraCaptureSession? = null
+        var openSubmitted = false
+
+        return try {
+            manager.openCamera("0", object : CameraDevice.StateCallback() {
+                override fun onOpened(c: CameraDevice) { opened.complete(c); if (retiring.get()) c.close() }
+                override fun onDisconnected(c: CameraDevice) { opened.completeExceptionally(IllegalStateException("Disconnected")); c.close() }
+                override fun onError(c: CameraDevice, e: Int) { opened.completeExceptionally(IllegalStateException("Error $e")); c.close() }
+                override fun onClosed(c: CameraDevice) { closed.complete(Unit) }
+            }, handler)
+            openSubmitted = true
+            val cam = opened.get(6, TimeUnit.SECONDS)
+            val targets = listOf(rawReader.surface, previewReader.surface)
+            val sessReq = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                targets.forEach(::addTarget)
+                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+            }.build()
+            cam.createCaptureSession(
+                SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    targets.map { OutputConfiguration(it) },
+                    executor,
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(s: CameraCaptureSession) { if (retiring.get()) s.close() else configured.complete(s) }
+                        override fun onConfigureFailed(s: CameraCaptureSession) { configured.completeExceptionally(IllegalStateException("Configure failed")); s.close() }
+                    },
+                ).apply { sessionParameters = sessReq },
+            )
+            session = configured.get(6, TimeUnit.SECONDS)
+            val repReq = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                targets.forEach(::addTarget)
+                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+            }.build()
+            session.setRepeatingRequest(repReq, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(s: CameraCaptureSession, req: CaptureRequest, res: TotalCaptureResult) {
+                    res.get(CaptureResult.SENSOR_TIMESTAMP)?.let { synchronized(camTimestamps) { camTimestamps += it } }
+                }
+            }, handler)
+
+            Thread.sleep(3_000L)
+            runCatching { session.stopRepeating() }
+
+            val gapThresh = (1_500_000_000L / fps.coerceAtLeast(1))
+            val camM = synchronized(camTimestamps) { computeTimestampMetrics(camTimestamps.toList(), gapThresh) }
+            val rawM = synchronized(rawTimestamps) { computeTimestampMetrics(rawTimestamps.toList(), gapThresh) }
+            json(
+                "fpsTarget" to fps,
+                "ok" to (rawM.frames > 10),
+                "whiteLevel" to whiteLevel,
+                "blackLevelPattern" to blackPattern?.toString(),
+                "camCb" to camM.toJson(),
+                "rawReader" to rawM.toJson(),
+                "pixelStats" to pixelStats.get(),
+            )
+        } finally {
+            retiring.set(true)
+            val cc = closed.thenApply { Unit }
+            lease.releaseAfter(cc)
+            if (openSubmitted) {
+                handler.post { try { session?.close() } finally { if (!opened.isCompletedExceptionally) opened.getNow(null)?.close() } }
+            } else closed.complete(Unit)
+            runCatching { cc.get(6, TimeUnit.SECONDS) }
+            runCatching { rawReader.close() }
+            runCatching { previewReader.close() }
+            thread.quitSafely()
+            runCatching { thread.join(4_000) }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Probe 8: Production OpenCineLogGpuPipeline 15s 4K60 & 5s 4K30 + Descriptor Check
+    // -------------------------------------------------------------------------
+    fun runProbe8_ProductionPipelineVerification(
+        context: Context,
+        outDir: File,
+        checkBudget: () -> Unit = {},
+    ): JSONObject {
+        outDir.mkdirs()
+        val engine = Camera2PreviewEngine(context.applicationContext)
+        val cam0 = engine.descriptors(1920, 1080).firstOrNull { it.cameraId == "0" }
+        val logProfilesJson = JSONArray(cam0?.logProfiles.orEmpty().map { p ->
+            json(
+                "size" to p.size.toString(),
+                "fps" to p.fps,
+                "sourcePath" to p.sourcePath.name,
+                "hfr" to p.constrainedHighSpeed,
+                "huaweiCuvaHdr" to p.huaweiCuvaHdr,
+            )
+        })
+        val has4k60Cuva = cam0?.logProfiles?.any { it.size == Size(3840, 2160) && it.fps == 60 && it.huaweiCuvaHdr } == true
+        val has4k30Cuva = cam0?.logProfiles?.any { it.size == Size(3840, 2160) && it.fps == 30 && it.huaweiCuvaHdr } == true
+        val has4k60VideoProfile = cam0?.videoProfiles?.any { it.size == Size(3840, 2160) && it.fps == 60 } == true
+        val hasUntestedOpenGate4k60 = cam0?.logProfiles?.any { it.size.width > 3840 && it.fps >= 60 } == true
+
+        val arms = JSONArray()
+        val configs = listOf(
+            Triple("8B_prod_4k60_oclog2_15s", 60, 15_000L) to "prod_4k60_oclog2_15s.mp4",
+            Triple("8C_prod_4k30_oclog2_5s", 30, 5_000L) to "prod_4k30_oclog2_5s.mp4",
+        )
+        for ((spec, fileName) in configs) {
+            val (armName, fps, durationMs) = spec
+            val res = try {
+                val temp = ensureCoolOrWait(context, checkBudget)
+                val outFile = File(outDir, fileName)
+                if (outFile.exists()) outFile.delete()
+                runProbe8RecordingArm(context, armName, outFile, fps, durationMs).put("batteryStartC", temp)
+            } catch (t: Throwable) {
+                json(
+                    "arm" to armName,
+                    "ok" to false,
+                    "errorClass" to t.javaClass.name,
+                    "error" to (t.message ?: t.toString()).take(300),
+                )
+            }
+            arms.put(res)
+        }
+        return saveProbeJson(outDir, "probe8_production_verification.json", json(
+            "probe" to "Probe8_ProductionPipelineVerification",
+            "supportsOpenCineLog" to (cam0?.supportsOpenCineLog == true),
+            "has4k60CuvaProfile" to has4k60Cuva,
+            "has4k30CuvaProfile" to has4k30Cuva,
+            "has4k60VideoProfile" to has4k60VideoProfile,
+            "hasUntestedOpenGate4k60" to hasUntestedOpenGate4k60,
+            "logProfilesCount" to logProfilesJson.length(),
+            "logProfiles" to logProfilesJson,
+            "batteryEndC" to batteryTempC(context),
+            "arms" to arms,
+        ))
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun runProbe8RecordingArm(
+        context: Context,
+        armName: String,
+        outFile: File,
+        fps: Int,
+        durationMs: Long,
+    ): JSONObject {
+        val lease = CaptureOwnerAdmission.processGlobal.acquire()
+        lease.ready().get(8, TimeUnit.SECONDS)
+        val manager = context.getSystemService(CameraManager::class.java)
+        val caps = manager.getCameraCharacteristics("0")
+        val cuvaReqKey = findVendorRequestKey(caps, "cuvaStateVideoMode")
+        val cuvaResKey = findVendorResultKey(caps, "cuvaStateVideoMode")
+        val cuvaHint = vendorKeyTypeHint(cuvaReqKey)
+        val sensorOrientation = caps.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+
+        val camThread = HandlerThread("p8-cam").apply { start() }
+        val camHandler = Handler(camThread.looper)
+        val executor = Executor { r -> camHandler.post(r) }
+        val previewDrainReader = ImageReader.newInstance(1280, 720, ImageFormat.PRIVATE, 4).apply {
+            setOnImageAvailableListener({ r -> runCatching { r.acquireLatestImage()?.close() } }, camHandler)
+        }
+
+        val failureMsg = AtomicReference<String?>(null)
+        val refusedMsg = AtomicReference<String?>(null)
+        val pipeline = OpenCineLogGpuPipeline(
+            size = Size(3840, 2160),
+            sourcePath = OpenCineLogSourcePath.HLG10_BT2020,
+            preview = previewDrainReader.surface,
+            sensorOrientationDegrees = sensorOrientation,
+            displayRotationDegrees = 0,
+            frontFacing = false,
+            viewAssist = true,
+            targetFps = fps,
+            passthroughSdr = false,
+            appContext = context.applicationContext,
+            researchEncoderOverride = null,
+            useZeroCopyVideoImageReader = true,
+            onFailure = { code, msg -> failureMsg.compareAndSet(null, "$code: $msg") },
+        )
+
+        val opened = CompletableFuture<CameraDevice>()
+        val closed = CompletableFuture<Unit>()
+        val configured = CompletableFuture<CameraCaptureSession>()
+        val retiring = AtomicBoolean()
+        val cuvaAppliedFmt = AtomicReference<String?>(null)
+        val cuvaObservedRes = AtomicReference<String?>(null)
+        val camTimestamps = mutableListOf<Long>()
+        val started = CountDownLatch(1)
+        val stopped = CompletableFuture<Pair<Boolean, OpenCineLogRecordingEvidence?>>()
+        var session: CameraCaptureSession? = null
+        var openSubmitted = false
+        var pfd: ParcelFileDescriptor? = null
+
+        return try {
+            val input = pipeline.cameraInputSurface
+            manager.openCamera("0", object : CameraDevice.StateCallback() {
+                override fun onOpened(c: CameraDevice) { opened.complete(c); if (retiring.get()) c.close() }
+                override fun onDisconnected(c: CameraDevice) { opened.completeExceptionally(IllegalStateException("Disconnected")); c.close() }
+                override fun onError(c: CameraDevice, e: Int) { opened.completeExceptionally(IllegalStateException("Error $e")); c.close() }
+                override fun onClosed(c: CameraDevice) { closed.complete(Unit) }
+            }, camHandler)
+            openSubmitted = true
+            val cam = opened.get(6, TimeUnit.SECONDS)
+
+            fun applyKeys(b: CaptureRequest.Builder) {
+                b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                if (cuvaReqKey != null) {
+                    cuvaAppliedFmt.compareAndSet(null, setVendorByteOrIntKey(b, cuvaReqKey, 1, cuvaHint))
+                }
+            }
+
+            val targets = listOf(input)
+            val sessReq = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply { targets.forEach(::addTarget); applyKeys(this) }.build()
+            cam.createCaptureSession(
+                SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR,
+                    targets.map { OutputConfiguration(it) },
+                    executor,
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(s: CameraCaptureSession) { if (retiring.get()) s.close() else configured.complete(s) }
+                        override fun onConfigureFailed(s: CameraCaptureSession) { configured.completeExceptionally(IllegalStateException("Configure failed")); s.close() }
+                    },
+                ).apply { sessionParameters = sessReq },
+            )
+            session = configured.get(6, TimeUnit.SECONDS)
+            val repReq = cam.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply { targets.forEach(::addTarget); applyKeys(this) }.build()
+            session.setRepeatingRequest(repReq, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(s: CameraCaptureSession, req: CaptureRequest, res: TotalCaptureResult) {
+                    res.get(CaptureResult.SENSOR_TIMESTAMP)?.let { synchronized(camTimestamps) { camTimestamps += it } }
+                    if (cuvaObservedRes.get() == null) readResultKeyValue(res, cuvaResKey)?.let { cuvaObservedRes.compareAndSet(null, it) }
+                }
+            }, camHandler)
+
+            Thread.sleep(500L)
+            pfd = ParcelFileDescriptor.open(outFile, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_READ_WRITE or ParcelFileDescriptor.MODE_TRUNCATE)
+            val geometry = RecordingGeometryCalculator.calculate(
+                sourceSize = Size(3840, 2160),
+                sensorOrientationDegrees = sensorOrientation,
+                deviceOrientationDegrees = 0,
+                lensFacing = CameraCharacteristics.LENS_FACING_BACK,
+                mode = RecordingGeometryMode.NATIVE_RASTER,
+            )
+            val recCalled = pipeline.startRecording(
+                output = pfd,
+                bitrate = if (fps >= 60) 80_000_000 else 60_000_000,
+                geometry = geometry,
+                onStarted = { started.countDown() },
+                onStopped = { ok, ev -> stopped.complete(ok to ev) },
+                onStartRefused = { code, msg -> refusedMsg.compareAndSet(null, "$code: $msg") },
+                hlgOutput = false,
+                hdr10Output = false,
+            )
+            val startedOk = recCalled && started.await(5, TimeUnit.SECONDS)
+            if (startedOk) {
+                Thread.sleep(durationMs)
+                pipeline.stopRecording()
+            }
+            val stopPair = runCatching { stopped.get(10, TimeUnit.SECONDS) }.getOrNull()
+            runCatching { pipeline.recordingFileRetirement().get(6, TimeUnit.SECONDS) }
+            runCatching { session.stopRepeating() }
+
+            val ev = stopPair?.second
+            val camMetrics = synchronized(camTimestamps) {
+                computeTimestampMetrics(camTimestamps.toList(), if (fps >= 60) 25_000_000L else 45_000_000L)
+            }
+            val fileMetrics = inspectWrittenMp4(outFile)
+            json(
+                "arm" to armName,
+                "ok" to (startedOk && stopPair?.first == true && outFile.length() > 1024L && failureMsg.get() == null && refusedMsg.get() == null),
+                "clip" to outFile.name,
+                "clipBytes" to outFile.length(),
+                "cuvaAppliedFmt" to cuvaAppliedFmt.get(),
+                "cuvaObservedRes" to cuvaObservedRes.get(),
+                "recCalled" to recCalled,
+                "startedOk" to startedOk,
+                "stoppedOk" to stopPair?.first,
+                "startRefused" to refusedMsg.get(),
+                "pipelineFailure" to failureMsg.get(),
+                "camCb" to camMetrics.toJson(),
+                "encodedFrames" to ev?.encodedFrames,
+                "maxVideoPtsGapUs" to ev?.maxVideoPtsGapUs,
+                "videoPtsGapsOverThreshold" to ev?.videoPtsGapsOverThreshold,
+                "eglRenderTargetBits" to ev?.eglRenderTargetBits,
+                "encoderVuiTransfer" to ev?.encoderVuiTransfer,
+                "containerVuiTransfer" to ev?.containerVuiTransfer,
+                "codecName" to ev?.codecName,
+                "codecProfile" to ev?.codecProfile,
+                "fileStats" to fileMetrics,
+            )
+        } finally {
+            retiring.set(true)
+            runCatching { pipeline.stopRecording() }
+            val pipeClose = runCatching { pipeline.closeAsync() }.getOrElse { CompletableFuture.completedFuture(Unit) }
+            val cc = closed.thenApply { Unit }
+            val totalRetire = pipeClose.thenCombine(cc) { _, _ -> Unit }
+            lease.releaseAfter(totalRetire)
+            if (openSubmitted) {
+                camHandler.post { try { session?.close() } finally { if (!opened.isCompletedExceptionally) opened.getNow(null)?.close() } }
+            } else closed.complete(Unit)
+            runCatching { totalRetire.get(8, TimeUnit.SECONDS) }
+            runCatching { previewDrainReader.close() }
+            runCatching { pfd?.close() }
+            camThread.quitSafely()
+            runCatching { camThread.join(4_000) }
         }
     }
 }

@@ -72,10 +72,12 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
             .getOrNull().orEmpty().ifEmpty { previews }
             .distinctBy { it.width to it.height }
             .filter { candidate -> previews.any { it.width == candidate.width && it.height == candidate.height } }
+        val hasHuawei4k60 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasHuawei4k60VideoRecording(characteristics)
         val regularProfiles = videoSizes.flatMap { size ->
             fixedFps.mapNotNull { fps ->
                 Camera2VideoProfile(size, fps, false).takeIf {
-                    streamCanReachFps(map, size, fps) && encoderCanReachFps(size, fps)
+                    (streamCanReachFps(map, size, fps) || huawei4k60StreamDurationOverride(size.width, size.height, fps, hasHuawei4k60)) &&
+                        encoderCanReachFps(size, fps)
                 }
             }
         }
@@ -110,7 +112,9 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
         } else false
         val hasHdr10 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             hlgProfiles?.supportedProfiles?.contains(DynamicRangeProfiles.HDR10) == true
-        val regularLogProfiles = if (hasHlg10 && hasBt2020Hlg) {
+        val hasHuaweiCuva = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && hasHuaweiCuvaHdrVideoKey(characteristics)
+        val regularLogProfiles = if ((hasHlg10 && hasBt2020Hlg) || hasHuaweiCuva) {
+            val huaweiCuvaFallback = !(hasHlg10 && hasBt2020Hlg) && hasHuaweiCuva
             videoSizes.flatMap { size ->
                 fixedFps.mapNotNull { fps ->
                     Camera2LogProfile(
@@ -121,8 +125,10 @@ internal fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int,
                         hdr10 = Hdr10Video.isOffered(
                             Build.VERSION.SDK_INT, hasHdr10, hasHdr10 && OpenCineLogGpuPipeline.findHdr10Encoder(size, fps) != null,
                         ),
+                        huaweiCuvaHdr = huaweiCuvaFallback,
                     ).takeIf {
-                        streamCanReachFps(map, size, fps) &&
+                        (streamCanReachFps(map, size, fps) ||
+                            huawei4k60StreamDurationOverride(size.width, size.height, fps, hasHuawei4k60 && OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(size, fps))) &&
                             OpenCineLogGpuPipeline.findEncoder(size, fps) != null
                     }
                 }
@@ -370,3 +376,28 @@ internal fun Camera2PreviewEngine.lensOrder(lensFacing: Int): Int = when (lensFa
     CameraCharacteristics.LENS_FACING_FRONT -> 1
     else -> 2
 }
+
+internal const val HUAWEI_CUVA_VIDEO_MODE_KEY = "com.huawei.capture.metadata.cuvaStateVideoMode"
+internal const val HUAWEI_4K60_VIDEO_CAPABILITY_KEY = "com.huawei.device.capabilities.HwVideoRecordingPre4K60En"
+
+internal fun hasHuaweiCuvaHdrVideoKey(characteristics: CameraCharacteristics): Boolean = runCatching {
+    characteristics.availableCaptureRequestKeys.any { it.name == HUAWEI_CUVA_VIDEO_MODE_KEY }
+}.getOrDefault(false)
+
+internal fun hasHuawei4k60VideoRecording(characteristics: CameraCharacteristics): Boolean = runCatching {
+    VendorKeys.staticBytes(characteristics, HUAWEI_4K60_VIDEO_CAPABILITY_KEY)?.firstOrNull()?.toInt() == 1
+}.getOrDefault(false)
+
+internal fun huawei4k60StreamDurationOverride(
+    width: Int,
+    height: Int,
+    fps: Int,
+    huawei4k60Supported: Boolean,
+): Boolean =
+    huawei4k60Supported &&
+        fps in 31..60 &&
+        width > 0 &&
+        height > 0 &&
+        maxOf(width, height) <= 3840 &&
+        minOf(width, height) <= 2160 &&
+        width.toLong() * height <= 3840L * 2160L

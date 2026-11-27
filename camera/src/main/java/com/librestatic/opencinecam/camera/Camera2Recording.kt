@@ -137,6 +137,10 @@ internal fun Camera2PreviewEngine.startGpuVideo(
                 onAnalysis = { analysis -> deliverGpuAnalysis(cameraGeneration, { analysisPipeline }, analysis) },
                 onOperatorLutStatus = { status -> deliverGpuLutStatus(cameraGeneration, { analysisPipeline }, status) },
                 onPreviewLost = { listener?.onPreviewSurfaceLost(it) },
+                useZeroCopyVideoImageReader = requestedTargetFps >= 60 && OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(
+                    Size(recordingGeometry.sourceSize.width, recordingGeometry.sourceSize.height),
+                    requestedTargetFps,
+                ),
             ) { code, message ->
                 // A retired/superseded pipeline's late failure must not reach a newer owner's listener.
                 val owner = analysisPipeline

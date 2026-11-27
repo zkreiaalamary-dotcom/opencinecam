@@ -493,6 +493,7 @@ internal fun Camera2PreviewEngine.configureLogSession(
                         applyEngineRequest(EngineRequestMode.LOG_RECORD)
                         applyTargetFps(this, descriptor)
                         applyManualControls(this, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        if (profile.huaweiCuvaHdr) applyHuaweiCuvaVideoMode(this, descriptor)
                     }
                     repeatingBuilder = builder
                     configured.setPhotoAwareRepeatingRequest(
@@ -515,17 +516,43 @@ internal fun Camera2PreviewEngine.configureLogSession(
             }
         },
     )
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !profile.huaweiCuvaHdr) {
         configuration.setColorSpace(ColorSpace.Named.BT2020_HLG)
     }
     try {
+        if (profile.huaweiCuvaHdr) {
+            configuration.setSessionParameters(
+                device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                    applyImageProcessing(this)
+                    applyDynamicFpsSession(this)
+                    applyTargetFps(this, descriptor)
+                    applyHuaweiCuvaVideoMode(this, descriptor)
+                }.build(),
+            )
+        }
         configureProcessingSession(configuration, device, CameraDevice.TEMPLATE_RECORD)
         createSessionRetryingWithoutStreamUse(
             device, descriptor, configuration,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) ColorSpace.Named.BT2020_HLG else null,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !profile.huaweiCuvaHdr) ColorSpace.Named.BT2020_HLG else null,
         )
     } catch (failure: Throwable) {
         sessionException(failure)
+    }
+}
+
+private fun Camera2PreviewEngine.applyHuaweiCuvaVideoMode(
+    builder: CaptureRequest.Builder,
+    descriptor: Camera2CameraDescriptor,
+) {
+    val key = runCatching {
+        manager.getCameraCharacteristics(descriptor.cameraId).availableCaptureRequestKeys
+            .firstOrNull { it.name == HUAWEI_CUVA_VIDEO_MODE_KEY }
+    }.getOrNull() ?: return
+    @Suppress("UNCHECKED_CAST")
+    val byteSet = runCatching { builder.set(key as CaptureRequest.Key<ByteArray>, byteArrayOf(1)) }
+    if (byteSet.isFailure) {
+        @Suppress("UNCHECKED_CAST")
+        runCatching { builder.set(key as CaptureRequest.Key<IntArray>, intArrayOf(1)) }
     }
 }
 
