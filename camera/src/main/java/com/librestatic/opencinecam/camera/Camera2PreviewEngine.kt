@@ -1410,6 +1410,7 @@ class Camera2PreviewEngine(
                             greyReference = logGreyReference,
                             useZeroCopyVideoImageReader = selectedLogProfile.huaweiCuvaHdr ||
                                 (requestedTargetFps >= 60 && OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(selectedLogProfile.size, requestedTargetFps)),
+                            astraCuvaLog = selectedLogProfile.huaweiCuvaHdr,
                             sourcePrimaries = if (selectedLogProfile.huaweiCuvaHdr) {
                                 OpenCineLogSourcePrimaries.BT2020_NATIVE
                             } else {

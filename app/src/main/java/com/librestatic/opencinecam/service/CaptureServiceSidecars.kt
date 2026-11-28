@@ -41,7 +41,10 @@ internal fun CaptureService.hlgSidecarJson(evidence: OpenCineLogRecordingEvidenc
         .put("primaries", evidence.gamut)
         .put("range", evidence.range)
         .put("sourceDynamicRange", evidence.sourceDynamicRange)
-        .put("sourcePrimaries", "BT.709")
+        .put("sourcePrimaries", evidence.sourcePrimariesApplied)
+        .put("sourcePrimariesBasis", evidence.sourcePrimariesBasis)
+        .put("sourceSurface", evidence.sourceSurface)
+        .put("pixelPath", if (evidence.sourceSurface == "DIRECT_SURFACE_0x324") "camera-to-encoder" else "gpu")
         .put("codecName", evidence.codecName)
         .put("codecProfile", evidence.codecProfile)
         .put("encoderVuiTransfer", evidence.encoderVuiTransfer ?: JSONObject.NULL)
@@ -91,14 +94,15 @@ internal fun CaptureService.logSidecarJson(evidence: OpenCineLogRecordingEvidenc
         .put("precision", evidence.sourcePrecision)
         // Primaries the decode assumed before converting to BT.2020. Clips without it are HLG takes
         // that read the BT.709-primaried stream as BT.2020 (see OpenCineLogGpuPipeline).
-        .put("primaries", "BT.709")
+        .put("primaries", evidence.sourcePrimariesApplied)
+        .put("primariesBasis", evidence.sourcePrimariesBasis)
         .put("androidDataSpace", evidence.sourceDataSpace ?: JSONObject.NULL)
         .put("dataSpaceMismatchedFrames", evidence.sourceDataSpaceMismatchedFrames ?: JSONObject.NULL)
         .put("unexpectedAndroidDataSpace", evidence.unexpectedSourceDataSpace ?: JSONObject.NULL)
         .put(
             "interpretation",
             if (evidence.sourcePath == OpenCineLogSourcePath.HLG10_BT2020) {
-                "HLG OETF decoded to scene-linear, BT.709 primaries measured on device converted to BT.2020 in highp GLES"
+                "HLG OETF decoded to scene-linear in highp GLES using the stated source primaries interpretation"
             } else {
                 "Standard-range ISP output interpreted with the BT.709 video transfer, linearized, and converted to BT.2020 in highp GLES; runtime dataspace is recorded and no source gamut, 10-bit, or HDR highlight claim is made"
             },
@@ -111,6 +115,7 @@ internal fun CaptureService.logSidecarJson(evidence: OpenCineLogRecordingEvidenc
         .put("range", evidence.range)
         .put(if (evidence.recordingLut != null) "sourceShaderSha256" else "shaderSha256", evidence.transformSha256)
         // Runtime shader parameter, part of the qualified tuple: scene-linear gain before OCLog2.
+        .put("preprocessing", if (evidence.astraLiveTransform) "astra-cuva-live-r1" else "legacy")
         .put("greyReference", evidence.greyReference.name)
         .put("sceneGain", evidence.sceneGain.toDouble())
         // Matrix/range/bit depth the shader decoded the camera YCbCr with; null means the
@@ -154,7 +159,12 @@ internal fun CaptureService.logSidecarJson(evidence: OpenCineLogRecordingEvidenc
     .put("maxVideoPtsGapUs", evidence.maxVideoPtsGapUs)
     .put("videoPtsGapsOverThreshold", evidence.videoPtsGapsOverThreshold)
     .put("timecode", timecodeReport?.let(::recordingTimecodeJson) ?: JSONObject.NULL)
-    .put("qualification", cameraState.value.activeLogProfile?.let { profile ->
+    .put("qualification", if (evidence.astraLiveTransform) JSONObject()
+        .put("stage", "EXPERIMENTAL")
+        .put("reason", "astra-cuva-live-r1-awaiting-device-color-and-cadence-qualification")
+        .put("evidenceId", JSONObject.NULL)
+        .put("exactProfileVerified", false)
+    else cameraState.value.activeLogProfile?.let { profile ->
         JSONObject()
             .put("stage", profile.qualificationStage.name)
             .put("reason", profile.qualificationReason)

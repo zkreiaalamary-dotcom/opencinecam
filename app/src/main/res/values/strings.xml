@@ -164,7 +164,7 @@
     <string name="log_grey_reference_match_sdr">Match SDR</string>
     <string name="log_grey_reference_native_detail">Each source keeps its own curve. No gain is applied.</string>
     <string name="log_grey_reference_match_hlg_detail">SDR clips are scaled down to the HLG grey. Lossless: nothing clips.</string>
-    <string name="log_grey_reference_match_sdr_detail" formatted="false">HLG clips are scaled up to the SDR grey. Highlights above about 75% HLG signal clip.</string>
+    <string name="log_grey_reference_match_sdr_detail" formatted="false">On Huawei CUVA, recording keeps native headroom. For other HLG sources, this lifts grey and can clip highlights.</string>
     <string name="hdr_format">HDR format</string>
     <string name="hdr_format_hlg">HLG</string>
     <string name="hdr_format_hdr10">HDR10</string>

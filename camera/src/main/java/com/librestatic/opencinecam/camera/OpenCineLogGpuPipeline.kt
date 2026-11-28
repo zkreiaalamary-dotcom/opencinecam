@@ -149,6 +149,9 @@ data class OpenCineLogRecordingEvidence(
     val sourceTransfer: String,
     val sourcePrecision: String,
     val sourceSurface: String = "PRIVATE",
+    val sourcePrimariesApplied: String = "BT.709",
+    val sourcePrimariesBasis: String = "legacy-source-profile",
+    val astraLiveTransform: Boolean = false,
     val sourceDataSpace: Int?,
     /** Recorded frames whose dataspace the tier's shader cannot decode; null when the platform does not report it. */
     val sourceDataSpaceMismatchedFrames: Long? = null,
@@ -447,7 +450,7 @@ internal class GpuPipelineInitializationFailure(
 enum class OpenCineLogSourcePrimaries {
     /** Camera HLG10 stream advertises BT.2020 but emits BT.709 primaries (e.g. Razr HAL quirk). */
     BT709_QUIRK,
-    /** Camera HLG10 stream emits true BT.2020 primaries (e.g. Huawei CUVA HLG 0x324); no 709->2020 gamut crush. */
+    /** Interpret HLG as BT.2020. Physical calibration of the camera output is separate. */
     BT2020_NATIVE,
 }
 
@@ -467,6 +470,7 @@ data class ResearchEncoderOverride(
     val singleContextWhen8Bit: Boolean = false,
     val previewFpsDivisor: Int = 1,
     val useLimitedRangeForRgba8Log: Boolean = false,
+    val experimentalSourcePrimaries: OpenCineLogSourcePrimaries? = null,
 )
 
 data class BitrateResolution(
@@ -505,9 +509,21 @@ class OpenCineLogGpuPipeline(
     greyReference: OpenCineLogGreyReference = OpenCineLogGreyReference.NATIVE,
     private val researchEncoderOverride: ResearchEncoderOverride? = null,
     private val useZeroCopyVideoImageReader: Boolean = false,
-    private val sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
+    sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
+    private val astraCuvaLog: Boolean = false,
     private val onFailure: (String, String) -> Unit,
 ) : AutoCloseable {
+    private val sourcePrimaries = researchEncoderOverride?.experimentalSourcePrimaries ?: sourcePrimaries
+    private val astraLive = astraCuvaLog && sourcePath == OpenCineLogSourcePath.HLG10_BT2020 && !passthroughSdr
+    private val sourcePrimariesApplied = if (sourcePath == OpenCineLogSourcePath.HLG10_BT2020 &&
+        this.sourcePrimaries == OpenCineLogSourcePrimaries.BT2020_NATIVE
+    ) "BT.2020" else "BT.709"
+    private val sourcePrimariesBasis = when {
+        sourcePath != OpenCineLogSourcePath.HLG10_BT2020 -> "sdr-isp-assumption"
+        researchEncoderOverride?.experimentalSourcePrimaries != null -> "experimental-override"
+        astraLive -> "huawei-cuva-profile-unmeasured"
+        else -> "legacy-source-profile"
+    }
     private val hisiliconMain10Workaround: Boolean = !passthroughSdr && runCatching {
         findEncoder(size, targetFps)?.codecName?.let(::requiresExplicitHevcLevel) == true
     }.getOrDefault(false)
@@ -729,7 +745,7 @@ class OpenCineLogGpuPipeline(
             try {
                 check(makeCurrent(pbuffer)) { "Lens correction context is unavailable." }
                 val fresh = if (passthroughSdr) linkProgram(VERTEX_SHADER, passthroughShader(spliced))
-                    else linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr, spliced, sourcePrimaries = sourcePrimaries))
+                    else linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr, spliced, sourcePrimaries = sourcePrimaries, astraLive = astraLive))
                 if (program != 0) GLES30.glDeleteProgram(program)
                 program = fresh
                 refreshMainProgramLocations()
@@ -752,7 +768,7 @@ class OpenCineLogGpuPipeline(
         if (ditheredEncoderProgram == 0) {
             ditheredEncoderProgram = linkProgram(
                 VERTEX_SHADER,
-                transformShader(sourcePath, shaderYcbcr, lensSpliced, dither8Bit = true, sourcePrimaries = sourcePrimaries),
+                transformShader(sourcePath, shaderYcbcr, lensSpliced, dither8Bit = true, sourcePrimaries = sourcePrimaries, astraLive = astraLive),
             )
         }
         return ditheredEncoderProgram
@@ -762,7 +778,7 @@ class OpenCineLogGpuPipeline(
         passthroughSdr -> passthroughSha256(lens = true)
         hdr10Output -> pqSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit, sourcePrimaries = sourcePrimaries)
         hlgOutput -> hlgSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit, sourcePrimaries = sourcePrimaries)
-        else -> transformSha256(sourcePath, shaderYcbcr, lens = true, dither8Bit = dither8Bit, sourcePrimaries = sourcePrimaries)
+        else -> transformSha256(sourcePath, shaderYcbcr, lens = true, dither8Bit = dither8Bit, sourcePrimaries = sourcePrimaries, astraLive = astraLive)
     }
 
     /**
@@ -991,7 +1007,10 @@ class OpenCineLogGpuPipeline(
     }
 
     private fun sceneGain(reference: OpenCineLogGreyReference): Float =
-        if (passthroughSdr) 1f else reference.sceneGain(sourcePath)
+        effectiveGreyReference(reference).sceneGain(sourcePath)
+
+    private fun effectiveGreyReference(reference: OpenCineLogGreyReference): OpenCineLogGreyReference =
+        if (passthroughSdr) OpenCineLogGreyReference.NATIVE else astraRecordingGreyReference(reference, astraLive)
 
     fun setPreviewSqueezeFactor(factor: Float) {
         previewSqueezeFactor = factor.coerceAtLeast(1f)
@@ -1293,7 +1312,7 @@ class OpenCineLogGpuPipeline(
                         ).also { check(it != EGL14.EGL_NO_SURFACE) { "Encoder did not accept the EGL window surface." } }
                     }
                     encoderEglSurface = eglSurface
-                    val takeGreyReference = if (passthroughSdr) OpenCineLogGreyReference.NATIVE else greyReference
+                    val takeGreyReference = effectiveGreyReference(greyReference)
                     val ditheredLens = eglPolicy.use8BitConfig && !passthroughSdr
                     val active = Recording(requireNotNull(ownedOutput), codec, codecSurface, muxer, candidate, geometry, embeddedAac, captureEpoch, minimumSensorTimestampNs, timelapse?.let(::TimelapseTimeline), projectRateOverride?.let(::ProjectFrameTimeline), onTimelapseProgress, onTimelapsePauseChanged, onEncodedProgress, onStopped, fileRetirement, recordingLut, onRecordingLutApplied,
                         takeGreyReference, sceneGain(takeGreyReference),
@@ -1583,7 +1602,7 @@ class OpenCineLogGpuPipeline(
             val extensions = GLES30.glGetString(GLES30.GL_EXTENSIONS).orEmpty().split(' ')
             if ("GL_EXT_YUV_target" in extensions) {
                 try {
-                    return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = true, sourcePrimaries = sourcePrimaries)).also { shaderYcbcr = true }
+                    return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = true, sourcePrimaries = sourcePrimaries, astraLive = astraLive)).also { shaderYcbcr = true }
                 } catch (failure: Exception) {
                     android.util.Log.w(LOG_TAG, "GL_EXT_YUV_target shader did not link; using the driver YCbCr conversion.", failure)
                     for (attempt in 0 until 8) if (GLES30.glGetError() == GLES30.GL_NO_ERROR) break
@@ -1591,7 +1610,7 @@ class OpenCineLogGpuPipeline(
             }
         }
         shaderYcbcr = false
-        return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = false, sourcePrimaries = sourcePrimaries))
+        return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = false, sourcePrimaries = sourcePrimaries, astraLive = astraLive))
     }
 
     private fun renderLatestFrame() {
@@ -1843,7 +1862,7 @@ class OpenCineLogGpuPipeline(
         if (operatorLutProgram == 0) {
             val lensOn = lensSpliced
             val source = if (passthroughSdr) passthroughShader(lensOn)
-                else transformShader(sourcePath, shaderYcbcr, lensOn, sourcePrimaries = sourcePrimaries)
+                else transformShader(sourcePath, shaderYcbcr, lensOn, sourcePrimaries = sourcePrimaries, astraLive = astraLive)
             val declarations = """
                 uniform highp sampler3D uOperatorLut;
                 uniform vec3 uLutMin;
@@ -2347,6 +2366,9 @@ class OpenCineLogGpuPipeline(
                     sourceColorSpace = sourcePath.colorSpace,
                     sourceTransfer = sourcePath.transfer,
                     sourcePrecision = sourcePath.sourcePrecision,
+                    sourcePrimariesApplied = sourcePrimariesApplied,
+                    sourcePrimariesBasis = sourcePrimariesBasis,
+                    astraLiveTransform = astraLive && !active.hlgOutput && active.recordingLut == null,
                     recordingLut = active.lutEvidence,
                     curve = if (active.hlgOutput) hdrFormat(active.hdr10Output).curve else if (active.recordingLut != null) "LUT_BAKED_SDR" else "OCLog2",
                     curveVersion = if (active.hlgOutput) hdrFormat(active.hdr10Output).curveVersion else if (active.recordingLut != null) "1" else "2.0",
@@ -2363,9 +2385,12 @@ class OpenCineLogGpuPipeline(
                     sourceDataSpace = lastSourceDataSpace,
                     sourceDataSpaceMismatchedFrames = active.dataSpaceMismatchedFrames,
                     unexpectedSourceDataSpace = active.unexpectedDataSpace,
-                    transformSha256 = if (active.hdr10Output) pqSignalSha256(shaderYcbcr, dither8Bit = ditheredEvidence)
-                        else if (active.hlgOutput) hlgSignalSha256(shaderYcbcr, dither8Bit = ditheredEvidence)
-                        else transformSha256(sourcePath, shaderYcbcr, dither8Bit = ditheredEvidence),
+                    transformSha256 = when {
+                        passthroughSdr -> passthroughSha256(lensSpliced)
+                        active.hdr10Output -> pqSignalSha256(shaderYcbcr, lensSpliced, ditheredEvidence, sourcePrimaries)
+                        active.hlgOutput -> hlgSignalSha256(shaderYcbcr, lensSpliced, ditheredEvidence, sourcePrimaries)
+                        else -> transformSha256(sourcePath, shaderYcbcr, lensSpliced, ditheredEvidence, sourcePrimaries, astraLive)
+                    },
                     encodedFrames = active.frames,
                     firstPtsUs = active.firstPtsUs,
                     lastPtsUs = active.lastPtsUs,
@@ -3370,11 +3395,17 @@ class OpenCineLogGpuPipeline(
             lens: Boolean = false,
             dither8Bit: Boolean = false,
             sourcePrimaries: OpenCineLogSourcePrimaries,
+            astraLive: Boolean = false,
         ): String {
+            val extended = astraLive && sourcePath == OpenCineLogSourcePath.HLG10_BT2020
             val base = fragmentShader(sourcePath, sourcePrimaries).let {
-                if (shaderYcbcr) ycbcrVariant(it) else it
+                if (shaderYcbcr) ycbcrVariant(it, preserveExtended = extended) else it
             }
-            val lensed = if (lens) LensShaderSplice.splice(base, sourceCurve(sourcePath)) else base
+            val lensed = when {
+                extended -> AstraLogShader.hlg(base, lens, shaderYcbcr)
+                lens -> LensShaderSplice.splice(base, sourceCurve(sourcePath))
+                else -> base
+            }
             return if (dither8Bit) dither8BitShader(lensed) else lensed
         }
 
@@ -3478,7 +3509,7 @@ class OpenCineLogGpuPipeline(
             }
         }
 
-        private fun ycbcrVariant(base: String): String {
+        private fun ycbcrVariant(base: String, preserveExtended: Boolean = false): String {
             for (anchor in YCBCR_ANCHORS) check(base.split(anchor).size == 2) { "YCbCr shader anchor drifted: $anchor" }
             return base
                 .replace(
@@ -3491,7 +3522,8 @@ class OpenCineLogGpuPipeline(
                 )
                 .replace(
                     "texture(uTexture, vTexCoord).rgb",
-                    "clamp(uYcbcrToRgb * (texture(uTexture, vTexCoord).rgb - uYcbcrOffset), 0.0, 1.0)",
+                    if (preserveExtended) "(uYcbcrToRgb * (texture(uTexture, vTexCoord).rgb - uYcbcrOffset))"
+                    else "clamp(uYcbcrToRgb * (texture(uTexture, vTexCoord).rgb - uYcbcrOffset), 0.0, 1.0)",
                 )
         }
 
@@ -3515,8 +3547,9 @@ class OpenCineLogGpuPipeline(
             lens: Boolean = false,
             dither8Bit: Boolean = false,
             sourcePrimaries: OpenCineLogSourcePrimaries,
+            astraLive: Boolean = false,
         ): String = MessageDigest.getInstance("SHA-256")
-            .digest(transformShader(sourcePath, shaderYcbcr, lens, dither8Bit, sourcePrimaries).toByteArray())
+            .digest(transformShader(sourcePath, shaderYcbcr, lens, dither8Bit, sourcePrimaries, astraLive).toByteArray())
             .joinToString("") { "%02x".format(it) }
 
         /** Identity of the linked HLG recording shader. */

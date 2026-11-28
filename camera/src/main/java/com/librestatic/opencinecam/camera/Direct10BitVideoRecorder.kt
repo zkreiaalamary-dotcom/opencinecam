@@ -414,6 +414,8 @@ internal class Direct10BitVideoRecorder private constructor(
                     sourceTransfer = sourcePath.transfer,
                     sourcePrecision = sourcePath.sourcePrecision,
                     sourceSurface = "DIRECT_SURFACE_0x324",
+                    sourcePrimariesApplied = "BT.2020",
+                    sourcePrimariesBasis = "direct-cuva-output-contract",
                     sourceDataSpace = null,
                     curve = HdrVideoFormat.HLG.curve,
                     curveVersion = HdrVideoFormat.HLG.curveVersion,
