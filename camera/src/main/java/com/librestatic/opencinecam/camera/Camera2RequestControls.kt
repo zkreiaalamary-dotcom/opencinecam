@@ -43,7 +43,7 @@ internal fun Camera2PreviewEngine.submitRecordingWhiteBalance() {
     if (configured is CameraConstrainedHighSpeedCaptureSession) return
     runCatching {
         applyManualControls(builder)
-        configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+        configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
     }.onFailure {
         if (recordingWbCallback != null) failRecordingWhiteBalance("white-balance-request-rejected")
         else listener?.onProfessionalControlsRejected(it.message ?: "White balance restoration was rejected.")
@@ -288,9 +288,16 @@ internal fun Camera2PreviewEngine.applyManualControls(
         }
     }
     val wbDescriptor = activeDescriptor
-    val wbCharacteristics = if (wbDescriptor?.huaweiVendorKelvinWb == true || wbDescriptor?.huaweiSmoothColorModeSupported == true) {
+    val wbCharacteristics = if (wbDescriptor?.huaweiVendorKelvinWb == true ||
+        wbDescriptor?.huaweiSmoothColorModeSupported == true ||
+        wbDescriptor?.variableApertures?.isNotEmpty() == true) {
         runCatching { manager.getCameraCharacteristics(wbDescriptor.cameraId) }.getOrNull()
     } else null
+    if (!isHighSpeedSession() && wbDescriptor?.variableApertures?.isNotEmpty() == true) {
+        HuaweiVendorControls.applyVariableAperture(
+            builder, wbCharacteristics, wbDescriptor.cameraId, professionalExposure?.apertureFNumber,
+        )
+    }
     val effectiveWb = (heldRecordingWb ?: requestedWhiteBalance).adaptTo(
         wbDescriptor?.kelvinRange.takeUnless { isHighSpeedSession() },
         wbDescriptor?.tintSupported == true,
@@ -361,6 +368,10 @@ internal fun Camera2PreviewEngine.applyImageProcessing(builder: CaptureRequest.B
     if (caps.edgeModes.isNotEmpty()) builder.set(CaptureRequest.EDGE_MODE, resolved.edge)
     applyPictureProfile(builder, caps)
     applyPictureControls(builder, caps.pictureControls, resolved.edge)
+    if (!isHighSpeedSession() && activeDescriptor?.huaweiSmoothColorModeSupported == true) {
+        val huaweiChars = runCatching { manager.getCameraCharacteristics(activeDescriptor!!.cameraId) }.getOrNull()
+        HuaweiVendorControls.applySmoothColorMode(builder, huaweiChars, activeDescriptor?.cameraId, imageProcessing.huaweiSmoothColor)
+    }
 }
 
 /**

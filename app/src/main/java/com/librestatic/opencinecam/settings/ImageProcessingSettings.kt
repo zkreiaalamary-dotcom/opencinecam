@@ -63,6 +63,18 @@ internal fun ImageProcessingSettings(state: CameraUiState, settings: CameraSetti
                 SettingsHelp(stringResource(R.string.image_picture_profile_help_summary), stringResource(R.string.image_picture_profile_help))
             }
         }
+        if (state.descriptor?.huaweiSmoothColorModeSupported == true) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingsSwitchRow(
+                    label = stringResource(R.string.image_huawei_smooth_color),
+                    checked = selected.huaweiSmoothColor,
+                    onCheckedChange = { onChange(settings.copy(imageProcessing = selected.copy(huaweiSmoothColor = it))) },
+                    tag = "image-huawei-smooth-color",
+                    enabled = !hfr,
+                )
+                SettingsHelp(stringResource(R.string.image_huawei_smooth_color_summary), stringResource(R.string.image_huawei_smooth_color_help))
+            }
+        }
         PictureControls(state, caps.pictureControls, selected, hfr, selected.resolve(caps, reported, hfr).values.edge) { onChange(settings.copy(imageProcessing = it)) }
         if (unavailable.isNotEmpty()) Text(stringResource(R.string.image_processing_unavailable), color = LocalCineColors.current.pending, fontSize = 16.sp)
         if (caps.sessionControls.isNotEmpty()) Text(stringResource(R.string.image_session_keys), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)

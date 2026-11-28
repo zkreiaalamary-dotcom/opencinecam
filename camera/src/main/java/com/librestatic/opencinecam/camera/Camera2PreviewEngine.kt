@@ -120,6 +120,8 @@ data class Camera2CameraDescriptor(
     val kelvinRange: IntRange? = null,
     val huaweiVendorKelvinWb: Boolean = false,
     val huaweiSmoothColorModeSupported: Boolean = false,
+    /** Huawei variable aperture f-numbers (`actuatorVAFNumberCapability`); empty when unsupported. */
+    val variableApertures: List<Float> = emptyList(),
     /** SENSOR_INFO_PHYSICAL_SIZE in mm (width, height), when advertised. */
     val sensorSizeMm: Pair<Float, Float>? = null,
     /** LENS_INFO_AVAILABLE_APERTURES as f-numbers; empty when not advertised. */
@@ -567,10 +569,12 @@ class Camera2PreviewEngine(
     private val rawZoomAdmissionLock = Any()
     @Volatile internal var generation = 0L
     internal var camera: CameraDevice? = null
+    internal var direct10BitDecimatedPreviewSurface: Surface? = null
     internal var session: CameraCaptureSession? = null
         set(value) {
             if (field !== value) {
                 pendingPreviewStartedReceipt = null
+                direct10BitDecimatedPreviewSurface = null
                 // captureDiagnostics() describes the current graph only: null until the new one is audited.
                 latestCaptureDiagnostics = null
             }
@@ -1000,6 +1004,13 @@ class Camera2PreviewEngine(
     private var subjectAttempt = 0L
     private var subjectRetry: Runnable? = null
     internal var logPreviewEnabled = false
+    @Volatile internal var direct10BitRecorder: Direct10BitVideoRecorder? = null
+    internal val direct10BitStopRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile internal var lastDirect10BitRetirement: CompletableFuture<Unit>? = null
+    @Volatile internal var pendingDirectCodecCleanup: (() -> Unit)? = null
+    fun renderedPreviewFrameCount(): Long = logPipeline?.renderedPreviewFrames ?: 0L
+    fun gpuScopePboStatsSnapshot(): AsyncPboStats? = logPipeline?.scopePboStatsSnapshot()
+    fun gpuFrameDiagnosticsSnapshot(): GpuFrameDiagSummary? = logPipeline?.frameDiagnosticsSnapshot()
     private var logViewAssistEnabled = false
     @Volatile private var logGreyReference = OpenCineLogGreyReference.NATIVE
     internal var imageProcessing = ImageProcessingSelection()
@@ -1968,6 +1979,34 @@ class Camera2PreviewEngine(
         noteSubmittedZoom(request)
     }
 
+    /**
+     * Submits the repeating request for [builder], decimating 4K60 Direct 10-bit preview targeting
+     * to every other sensor frame (30 fps viewfinder + 60 fps full encode) when active.
+     */
+    internal fun CameraCaptureSession.setEngineRepeatingRequest(
+        builder: CaptureRequest.Builder,
+        executor: Executor,
+        callback: CameraCaptureSession.CaptureCallback,
+    ) {
+        val decimatedPreview = direct10BitDecimatedPreviewSurface
+        if (decimatedPreview != null && this !is CameraConstrainedHighSpeedCaptureSession &&
+            burstRequest.get() == null && accumulationRequest.get() == null &&
+            bracketRequest.get() == null && photoRequest.get() == null
+        ) {
+            val withPreview = builder.build()
+            builder.removeTarget(decimatedPreview)
+            val codecOnly = try {
+                builder.build()
+            } finally {
+                builder.addTarget(decimatedPreview)
+            }
+            setRepeatingBurstRequests(listOf(withPreview, codecOnly), executor, callback)
+            noteSubmittedZoom(withPreview)
+            return
+        }
+        setPhotoAwareRepeatingRequest(builder.build(), executor, callback)
+    }
+
     /** Under [stillAdmissionLock]: the still owner was built on the camera still open (onError clears it under the lock). */
     internal fun stillOwnerCurrent(device: CameraDevice, ownerGeneration: Long): Boolean =
         device === camera && device !== stillAdmissionRetired && ownerGeneration == generation
@@ -2176,7 +2215,7 @@ class Camera2PreviewEngine(
             val configured = session ?: return@execute
             applyManualControls(builder)
             runCatching {
-                configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(descriptor, false))
+                configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(descriptor, false))
             }.onFailure { listener?.onControlRejected("manual-control-failed", it.message ?: "Manual control update failed.") }
         }
     }
@@ -2305,11 +2344,11 @@ class Camera2PreviewEngine(
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
                 currentSession.captureSingleRequest(builder.build(), cameraExecutor, previewCaptureCallback(currentDescriptor, false))
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                currentSession.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(currentDescriptor, false))
+                currentSession.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(currentDescriptor, false))
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
                 currentSession.captureSingleRequest(builder.build(), cameraExecutor, previewCaptureCallback(currentDescriptor, false))
                 builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-                currentSession.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(currentDescriptor, false))
+                currentSession.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(currentDescriptor, false))
                 imageHandler.postDelayed(restoreTapFocus, TAP_FOCUS_HOLD_MS)
             } catch (failure: Exception) {
                 clearTapFocusLocked(notify = true)
@@ -2335,7 +2374,7 @@ class Camera2PreviewEngine(
             val configured = session ?: return@execute
             runCatching {
                 applyManualControls(builder)
-                configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+                configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
             }.onFailure { failure ->
                 professionalExposure = previousExposure
                 imageProcessing = previousProcessing
@@ -2343,7 +2382,7 @@ class Camera2PreviewEngine(
                 aeLockActive = previousLock
                 runCatching {
                     applyManualControls(builder)
-                    configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+                    configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
                 }
                 listener?.onProfessionalControlsRejected(failure.message ?: "Professional controls were rejected.")
             }
@@ -2390,7 +2429,7 @@ class Camera2PreviewEngine(
             val builder = repeatingBuilder ?: return@execute
             val configured = session ?: return@execute
             applyManualControls(builder)
-            runCatching { configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
+            runCatching { configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
                 .onFailure { listener?.onControlRejected("white-balance-failed", it.message ?: "White balance update failed.") }
         }
     }
@@ -2409,7 +2448,7 @@ class Camera2PreviewEngine(
             val builder = repeatingBuilder ?: return@execute
             val configured = session ?: return@execute
             applyManualControls(builder)
-            runCatching { configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
+            runCatching { configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
                 .onFailure { listener?.onControlRejected("exposure-compensation-failed", it.message ?: "Exposure compensation update failed.") }
         }
     }
@@ -2427,13 +2466,13 @@ class Camera2PreviewEngine(
             if (isHighSpeedSession()) return@execute
             runCatching {
                 applyTorch(builder)
-                session?.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+                session?.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
             }.onFailure {
                 requestedTorchEnabled = previousEnabled
                 requestedTorchStrength = previousStrength
                 runCatching {
                     applyTorch(builder)
-                    session?.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+                    session?.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
                 }
                 listener?.onTorchRejected(it.message ?: "Flash control update failed.")
             }
@@ -2457,7 +2496,7 @@ class Camera2PreviewEngine(
             val builder = repeatingBuilder ?: return@execute
             val configured = session ?: return@execute
             applyManualControls(builder)
-            runCatching { configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
+            runCatching { configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
                 .onFailure {
                     aeLockActive = false
                     listener?.onAeLockChanged(false)
@@ -2608,7 +2647,7 @@ class Camera2PreviewEngine(
     ) {
         applyManualControls(builder)
         try {
-            configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(descriptor, false))
+            configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(descriptor, false))
         } catch (failure: Throwable) {
             if (isZoomRejection(failure, zoomChanged = requestedZoomRatio != lastAcceptedZoomRatio)) {
                 requestedZoomRatio = lastAcceptedZoomRatio
@@ -2791,9 +2830,165 @@ class Camera2PreviewEngine(
     ): Boolean {
         val pipeline = logPipeline ?: return false
         val descriptor = activeDescriptor ?: return false
-        if (!logPreviewEnabled || recording) return false
+        if (!logPreviewEnabled || recording || direct10BitRecorder != null) return false
         val cameraGeneration = generation
         lastLogRecordingEvidence = null
+        val useDirect10Bit = Direct10BitVideoPolicy.shouldUseDirect10BitHlg(
+            hlgOutput = hlgOutput,
+            hdr10Output = hdr10Output && hlgOutput && activeLogProfile?.hdr10 == true,
+            huaweiCuvaHdr = activeLogProfile?.huaweiCuvaHdr == true,
+            constrainedHighSpeed = activeLogProfile?.constrainedHighSpeed == true || isHighSpeedSession(),
+            hasRecordingLut = recordingLut != null,
+            hasLensCorrection = !lensLockEngaged() && (lensCorrectionTable != null || lensCalibration != null),
+            isTimelapse = false,
+            hasProjectRateOverride = false,
+            hasDesqueezedAnamorphic = recordingGeometry.pixelAspectRatioWidth != recordingGeometry.pixelAspectRatioHeight ||
+                recordingGeometry.encodedSize.width.toLong() * recordingGeometry.encodedSize.height !=
+                recordingGeometry.sourceSize.width.toLong() * recordingGeometry.sourceSize.height,
+            hasEncoderOverride = false,
+            targetFps = requestedTargetFps,
+        )
+        if (useDirect10Bit) {
+            val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
+            val direct = try {
+                Direct10BitVideoRecorder.prepare(
+                    context = appContext,
+                    output = output,
+                    geometry = recordingGeometry,
+                    sourcePath = activeLogProfile?.sourcePath ?: OpenCineLogSourcePath.HLG10_BT2020,
+                    targetFps = requestedTargetFps,
+                    bitrate = videoBitrate,
+                    cameraTimestampRealtime = descriptor.timestampSourceRealtime,
+                    audio = audio,
+                    separateAudioClock = separateAudioClock,
+                    onEncodedProgress = { progress ->
+                        if (generation == cameraGeneration && logPipeline === pipeline) latestEncodedProgress = progress
+                    },
+                    onFirstRecordedFrame = { timestampNs ->
+                        if (generation == cameraGeneration && logPipeline === pipeline) listener?.onRecordingFirstFrame(timestampNs)
+                    },
+                    onRecordedFrame = { timestampNs, ptsNs ->
+                        if (generation == cameraGeneration && logPipeline === pipeline) listener?.onRecordingFrame(timestampNs, ptsNs)
+                    },
+                    onStopped = { success, evidence ->
+                        cameraExecutor.execute {
+                            if (generation != cameraGeneration) return@execute
+                            evidence?.encodedProgress?.let { latestEncodedProgress = it }
+                            lastCaptureEpochReport = evidence?.avTiming
+                            lastRecordingLutEvidence = null
+                            recording = false
+                            lastLogRecordingEvidence = evidence
+                            lastDirect10BitRetirement = direct10BitRecorder?.retirementFuture() ?: lastDirect10BitRetirement
+                            val stoppedDirect = direct10BitRecorder
+                            direct10BitRecorder = null
+                            direct10BitStopRequested.set(false)
+                            val retirement = lastDirect10BitRetirement ?: CompletableFuture.completedFuture(Unit)
+                            val restoreDevice = camera
+                            val restoreDescriptor = activeDescriptor
+                            val cleanup = {
+                                stoppedDirect?.releaseCodecAndSurface()
+                                pipeline.releaseDirectPreviewSurface()
+                            }
+                            pendingDirectCodecCleanup = cleanup
+                            reportRecordingStopped(success, retirement)
+                            settleOutputRetirements()
+                            if (logPreviewEnabled && restoreDevice != null && restoreDescriptor != null) {
+                                configureLogSession(
+                                    restoreDevice,
+                                    restoreDescriptor,
+                                    generation,
+                                    onSessionReplaced = {
+                                        if (pendingDirectCodecCleanup === cleanup) pendingDirectCodecCleanup = null
+                                        cleanup()
+                                    },
+                                )
+                            } else {
+                                runCatching { session?.close() }
+                                session = null
+                                if (pendingDirectCodecCleanup === cleanup) pendingDirectCodecCleanup = null
+                                cleanup()
+                            }
+                        }
+                    },
+                    sampleListener = sampleListener,
+                    isCancelled = { cancelled.get() || disposed.get() || generation != cameraGeneration },
+                )
+            } catch (failure: Throwable) {
+                Log.e(TAG, "Direct10BitVideoRecorder.prepare failed", failure)
+                listener?.onFailure("direct-10bit-prepare-failed", failure.message ?: "Direct 10-bit HLG recording could not be prepared.", true)
+                return false
+            }
+            direct10BitRecorder = direct
+            direct10BitStopRequested.set(false)
+            lastDirect10BitRetirement = direct.retirementFuture()
+            cameraExecutor.execute {
+                val device = camera
+                val currentDescriptor = activeDescriptor
+                if (disposed.get() || generation != cameraGeneration || !logPreviewEnabled || recording ||
+                    logPipeline !== pipeline || device == null || currentDescriptor == null ||
+                    direct10BitRecorder !== direct
+                ) {
+                    cancelled.set(true)
+                    if (direct10BitRecorder === direct) {
+                        direct10BitRecorder = null
+                        direct10BitStopRequested.set(false)
+                    }
+                    direct.abortBeforeStart()
+                    settleOutputRetirements()
+                    return@execute
+                }
+                val previewWidth = if (requestedTargetFps >= 60) 640 else 1280
+                val previewHeight = if (requestedTargetFps >= 60) 360 else 720
+                val directPreviewSurface = runCatching { pipeline.acquireDirectPreviewSurface(previewWidth, previewHeight) }.getOrNull()
+                if (directPreviewSurface == null) {
+                    cancelled.set(true)
+                    if (direct10BitRecorder === direct) {
+                        direct10BitRecorder = null
+                        direct10BitStopRequested.set(false)
+                    }
+                    direct.abortBeforeStart(IllegalStateException("Failed to create 720p direct preview surface."))
+                    settleOutputRetirements()
+                    return@execute
+                }
+                runCatching { session?.stopRepeating() }
+                configureDirect10BitLogSession(
+                    device = device,
+                    descriptor = currentDescriptor,
+                    currentGeneration = cameraGeneration,
+                    previewInput = directPreviewSurface,
+                    codecSurface = direct.codecSurface,
+                    ownsTake = { direct10BitRecorder === direct && !direct10BitStopRequested.get() },
+                    onConfiguredSuccess = {
+                        if (direct10BitRecorder !== direct) return@configureDirect10BitLogSession
+                        direct.startAfterSessionConfigured()
+                        lastRecordingLutEvidence = null
+                        recording = true
+                        listener?.onRecordingStarted(recordingGeometry.sourceSize.width, recordingGeometry.sourceSize.height)
+                    },
+                    onConfigureFailure = { failure ->
+                        if (direct10BitRecorder === direct) {
+                            direct10BitRecorder = null
+                            direct10BitStopRequested.set(false)
+                            recording = false
+                            pipeline.releaseDirectPreviewSurface()
+                            direct.abortBeforeStart(failure)
+                            settleOutputRetirements()
+                            if (generation == cameraGeneration && logPreviewEnabled && camera != null && activeDescriptor != null) {
+                                configureLogSession(camera!!, activeDescriptor!!, generation)
+                            }
+                            if (failure != null) {
+                                listener?.onFailure(
+                                    "direct-10bit-session-failed",
+                                    failure.message ?: "Direct 10-bit HLG session failed.",
+                                    true,
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+            return true
+        }
         pipeline.onFirstRecordedFrame = { timestampNs ->
             if (generation == cameraGeneration && logPipeline === pipeline) listener?.onRecordingFirstFrame(timestampNs)
         }
@@ -2908,6 +3103,45 @@ class Camera2PreviewEngine(
 
     fun stopVideo(): Boolean {
         if (!recording) return false
+        val direct = direct10BitRecorder
+        if (direct != null) {
+            if (!direct10BitStopRequested.compareAndSet(false, true)) return false
+            cameraExecutor.execute {
+                if (direct10BitRecorder !== direct) return@execute
+                val draining = session
+                session = null
+                if (draining == null || runCatching { draining.stopRepeating() }.isFailure) {
+                    direct.stopRecording()
+                    return@execute
+                }
+                var finished = false
+                lateinit var timeout: Runnable
+                val finish = {
+                    if (!finished) {
+                        finished = true
+                        imageHandler.removeCallbacks(timeout)
+                        if (drainingRecorderSession === draining) {
+                            drainingRecorderSession = null
+                            recorderDrainContinuation = null
+                        }
+                        direct.stopRecording()
+                    }
+                }
+                timeout = Runnable {
+                    cameraExecutor.execute {
+                        if (!finished) {
+                            Log.w(TAG, "Direct 10-bit session did not drain within $RECORDER_STOP_DRAIN_TIMEOUT_MS ms; stopping anyway")
+                            runCatching { draining.abortCaptures() }
+                        }
+                        finish()
+                    }
+                }
+                drainingRecorderSession = draining
+                recorderDrainContinuation = finish
+                imageHandler.postDelayed(timeout, RECORDER_STOP_DRAIN_TIMEOUT_MS)
+            }
+            return true
+        }
         if (!recorderOverGpuPreview) logPipeline?.let { return it.stopRecording() }
         val request = recorderRequest.get() ?: return false
         if (!request.stopRequested.compareAndSet(false, true)) return false
@@ -3094,7 +3328,7 @@ class Camera2PreviewEngine(
         val configured = session ?: return true
         applyManualControls(builder)
         return runCatching {
-            configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+            configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
         }.onFailure {
             listener?.onControlRejected("lock-reapply-failed", it.message ?: "Lock update could not be applied.")
         }.isSuccess
@@ -3296,6 +3530,14 @@ class Camera2PreviewEngine(
         processingDefaults.clear()
         if (recording) runCatching { recorder?.stop() }
         releaseRecorder()
+        direct10BitRecorder?.let { rec ->
+            runCatching { rec.stopRecording() }
+            rec.releaseCodecAndSurface()
+            if (direct10BitRecorder === rec) direct10BitRecorder = null
+        }
+        pendingDirectCodecCleanup?.invoke()
+        pendingDirectCodecCleanup = null
+        direct10BitStopRequested.set(false)
         logPipeline?.let(::retirePipeline)
         logPipeline = null
         synchronizeSubjectOutput()
@@ -3477,7 +3719,7 @@ class Camera2PreviewEngine(
         const val DEFAULT_TARGET_FPS = 30
         internal const val RECORDER_LEVEL_INTERVAL_MS = 100L
         // A few frames at 24 fps; a high-speed burst drains far sooner.
-        private const val RECORDER_STOP_DRAIN_TIMEOUT_MS = 500L
+        internal const val RECORDER_STOP_DRAIN_TIMEOUT_MS = 500L
         internal const val MIME_AVC = "video/avc"
         internal const val MIME_HEVC = "video/hevc"
         internal const val MIN_SELECTABLE_FPS = 10

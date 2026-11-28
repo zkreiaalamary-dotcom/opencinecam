@@ -152,7 +152,7 @@ internal class LabDiagnosticRecorder(
     companion object {
         const val DEFAULT_MAX_FILE_BYTES = 2L * 1024L * 1024L
         private val RELEVANT_REGEX = Regex(
-            "CameraDaemon|CameraService|HISP|CamX|OpenCineCam|MediaCodec|OMX|hw_thermal|libc|DEBUG|AndroidRuntime|TONEMAP_PRESET|AP_COMMAND_ACQUIRE",
+            "CameraDaemon|CameraService|HISP|CamX|OpenCineCam|MediaCodec|OMX|hw_thermal|libc|DEBUG|AndroidRuntime|TONEMAP_PRESET|AP_COMMAND_ACQUIRE|VENC|OMXComponentEncoder|BufferQueue|CaptureEpoch|Direct10Bit",
             RegexOption.IGNORE_CASE,
         )
 

@@ -80,6 +80,14 @@ internal object VendorKeys {
         key?.let(characteristics::get)
     }.getOrNull()
 
+    /** A float[] static vendor tag by name (see [staticInts]). */
+    @Suppress("UNCHECKED_CAST")
+    fun staticFloats(characteristics: CameraCharacteristics, name: String): FloatArray? = runCatching {
+        val listed = characteristics.keys.firstOrNull { it.name == name } as CameraCharacteristics.Key<FloatArray>?
+        val key = listed ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) CameraCharacteristics.Key(name, FloatArray::class.java) else null
+        key?.let(characteristics::get)
+    }.getOrNull()
+
     /** A request key whose gate is already known to exist (any static type): advertised, else built by name on API 29+. */
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> requestGated(

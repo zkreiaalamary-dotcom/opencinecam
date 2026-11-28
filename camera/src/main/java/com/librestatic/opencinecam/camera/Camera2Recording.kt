@@ -302,11 +302,16 @@ internal fun Camera2PreviewEngine.reportRecordingStopped(success: Boolean, retir
     listener?.onRecordingStopped(success && retired)
 }
 
-internal fun Camera2PreviewEngine.recordingOutputLive(): Boolean = recorder != null || recorderRequest.get() != null || recording
+internal fun Camera2PreviewEngine.recordingOutputLive(): Boolean =
+    recorder != null || recorderRequest.get() != null || direct10BitRecorder != null || recording
 
 internal fun Camera2PreviewEngine.completeOutputRetirement(completion: CompletableFuture<Unit>) {
     val receipts = retiringPipelines.map { it.closeAsync() } + initializationRetirements.toList() +
-        listOfNotNull(logPipeline?.recordingFileRetirement())
+        listOfNotNull(
+            logPipeline?.recordingFileRetirement(),
+            direct10BitRecorder?.retirementFuture(),
+            lastDirect10BitRetirement,
+        )
     CompletableFuture.allOf(*receipts.toTypedArray()).whenComplete { _, error ->
         if (error == null) completion.complete(Unit) else completion.completeExceptionally(error)
     }
@@ -331,6 +336,7 @@ internal fun Camera2PreviewEngine.settleOutputRetirements() {
 /** Camera loss ends the take where it stands, so its output can retire and publish as incomplete (ADR-0033). */
 internal fun Camera2PreviewEngine.endTakeOnCameraLoss(rawReason: String) {
     endRawTakeOnCameraLoss(rawReason)
+    if (recording) direct10BitRecorder?.stopRecording()
     if (recording) logPipeline?.stopRecording()
     recorderRequest.get()?.let { request ->
         if (recording) runCatching { recorder?.stop() }.onFailure { Log.w(TAG, "MediaRecorder stop after camera loss failed", it) }

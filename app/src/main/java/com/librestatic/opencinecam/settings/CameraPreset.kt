@@ -270,10 +270,11 @@ object CameraPresetCodec {
         // Encoder support is a property of this device; not yet a portable key (needs a schema revision).
         videoCodec = current.videoCodec,
         hdrVideoFormat = current.hdrVideoFormat,
-        // The low-light boost is a per-device capability choice, not part of a look (no schema revision).
-        exposure = preset.exposure.copy(lowLightBoost = current.exposure.lowLightBoost),
-        // Qualcomm picture controls are vendor values of this camera's advertised range, not a portable look.
-        imageProcessing = preset.imageProcessing.copy(saturation = current.imageProcessing.saturation, sharpness = current.imageProcessing.sharpness),
+        // The low-light boost and variable aperture are per-device capabilities, not portable across cameras.
+        exposure = preset.exposure.copy(lowLightBoost = current.exposure.lowLightBoost, apertureFNumber = current.exposure.apertureFNumber),
+        // Qualcomm picture controls and Huawei Smooth ISP belong to this camera's advertised controls, not a portable look.
+        imageProcessing = preset.imageProcessing.copy(saturation = current.imageProcessing.saturation, sharpness = current.imageProcessing.sharpness,
+            huaweiSmoothColor = current.imageProcessing.huaweiSmoothColor),
         // OCLog2 review view is a viewing habit of this device, not part of a look.
         playback = preset.playback.copy(logView = current.playback.logView, nativeSurfaceFrames = current.playback.nativeSurfaceFrames,
             rawPlayback = current.playback.rawPlayback),

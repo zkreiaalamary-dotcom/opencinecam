@@ -481,7 +481,7 @@ internal fun Camera2PreviewEngine.driveInstantAec(armedSession: CameraCaptureSes
             boostApplied = request.get(key) == instantAec.mode,
         ) ?: return
         builder.set(key, InstantAec.MODE_NORMAL)
-        armedSession.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+        armedSession.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
         Log.i(TAG, "Instant AEC released reason=$release timeToConvergeMs=$elapsedMs recording=$recording")
     }.onFailure { Log.w(TAG, "Instant AEC skipped: ${it.message}") }
 }
@@ -498,7 +498,7 @@ internal fun Camera2PreviewEngine.engageInstantAec(
     if (!instantAec.begin(now, boost, eligible, recording)) return
     try {
         builder.set(key, boost)
-        armedSession.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+        armedSession.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
         Log.i(TAG, "Instant AEC engaged mode=$boost trigger=$trigger recording=$recording")
     } catch (failure: Throwable) {
         instantAec.reset()

@@ -500,6 +500,7 @@ class OpenCineLogGpuPipeline(
     private val zeroCopyActive: Boolean =
         useZeroCopyVideoImageReader && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && EglHardwareBufferBridge.loaded
     private val zeroCopyTextureMatrix: FloatArray = imageReaderTextureMatrix(sensorOrientationDegrees)
+    private val timestampBootMapper = CameraTimestampBootMapper(cameraTimestampRealtime)
     @Volatile private var researchObserver: Camera2ResearchObserver? = null
 
     fun attachResearchObserver(observer: Camera2ResearchObserver?) {
@@ -522,7 +523,8 @@ class OpenCineLogGpuPipeline(
 
     private val thread = HandlerThread("OpenCineLogGL").apply { start() }
     private val frameDiag = OpenCineLogFrameDiagnostics.create(researchEncoderOverride?.enableFrameDiagnostics == true)
-    private var asyncPboScopeReader: AsyncPboScopeReader? = if (researchEncoderOverride?.useAsyncPboScopes == true) AsyncPboScopeReader() else null
+    private var asyncPboScopeReader: AsyncPboScopeReader? =
+        if (researchEncoderOverride?.useAsyncPboScopes == true || targetFps >= 60 || hisiliconMain10Workaround) AsyncPboScopeReader() else null
     @Volatile private var lastBitrateResolution: BitrateResolution? = null
     private val viewfinderGapTrace = if (LensSwitchDiagnostics.enabled()) ViewfinderGapTrace() else null
     /** Set when the latest SDR take fell back from HEVC to H.264; reset by each start. */
@@ -532,6 +534,9 @@ class OpenCineLogGpuPipeline(
     fun frameDiagnosticsSnapshot(): GpuFrameDiagSummary? = frameDiag?.snapshotSummary()
     fun scopePboStatsSnapshot(): AsyncPboStats? = asyncPboScopeReader?.stats()
     @Volatile var lastZeroCopyHardwareFormat: Int? = null
+        private set
+    @Volatile private var directPreviewReader: ImageReader? = null
+    @Volatile var renderedPreviewFrames: Long = 0L
         private set
     private val handler = Handler(thread.looper)
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -901,7 +906,7 @@ class OpenCineLogGpuPipeline(
         lastRecordingFile.completion.thenApply { it }
     }
 
-    private class RecordingFileRetirement {
+    internal class RecordingFileRetirement {
         val completion = CompletableFuture<Unit>()
         private var failure: Throwable? = null
         @Synchronized fun noteFailure(problem: Throwable) {
@@ -931,6 +936,39 @@ class OpenCineLogGpuPipeline(
 
     fun setViewAssist(enabled: Boolean) {
         viewAssistEnabled = enabled
+    }
+
+    /**
+     * Acquires a 720p direct-preview [ImageReader] surface on the GL thread so Camera2 can feed
+     * viewfinder preview & scopes alongside a 4K Direct 10-bit HLG `0x324` encoder surface.
+     */
+    fun acquireDirectPreviewSurface(width: Int = 1280, height: Int = 720): Surface = callOnGlThread {
+        directPreviewReader?.setOnImageAvailableListener(null, null)
+        directPreviewReader?.close()
+        val reader = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ImageReader.newInstance(
+                width,
+                height,
+                ImageFormat.PRIVATE,
+                6,
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
+            )
+        } else {
+            ImageReader.newInstance(width, height, ImageFormat.PRIVATE, 6)
+        }
+        reader.setOnImageAvailableListener({ r -> renderLatestImageReaderFrame(r, dropBacklog = true) }, handler)
+        directPreviewReader = reader
+        reader.surface
+    }
+
+    /** Closes the auxiliary 720p direct-preview reader after Camera2 leaves the dual-surface session. */
+    fun releaseDirectPreviewSurface() {
+        if (closed.get()) return
+        handler.post {
+            directPreviewReader?.setOnImageAvailableListener(null, null)
+            directPreviewReader?.close()
+            directPreviewReader = null
+        }
     }
 
     /** Takes effect for monitoring at once and for the next take; an active take keeps its gain. */
@@ -1555,9 +1593,14 @@ class OpenCineLogGpuPipeline(
         }
     }
 
-    private fun renderLatestImageReaderFrame() {
-        val reader = zeroCopyImageReader ?: return
-        val image = runCatching { reader.acquireNextImage() }.getOrNull() ?: return
+    private fun renderLatestImageReaderFrame(
+        reader: ImageReader? = zeroCopyImageReader,
+        dropBacklog: Boolean = false,
+    ) {
+        val activeReader = reader ?: return
+        val image = runCatching {
+            if (dropBacklog) activeReader.acquireLatestImage() else activeReader.acquireNextImage()
+        }.getOrNull() ?: return
         if (closed.get()) {
             runCatching { image.close() }
             return
@@ -1573,7 +1616,10 @@ class OpenCineLogGpuPipeline(
                 lastZeroCopyHardwareFormat = EglHardwareBufferBridge.describeAhb(hb)?.first ?: hb.format
             }
             eglImg = EglHardwareBufferBridge.createEglImage(hb)
-            if (eglImg == 0L) return
+            if (eglImg == 0L) {
+                android.util.Log.w(LOG_TAG, "createEglImage returned 0 for format=0x${hb.format.toString(16)} size=${hb.width}x${hb.height}")
+                return
+            }
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
             val bindErr = EglHardwareBufferBridge.bindExternalTexture(eglImg)
             check(bindErr == 0) { "glEGLImageTargetTexture2DOES failed with 0x${bindErr.toString(16)}" }
@@ -1595,10 +1641,15 @@ class OpenCineLogGpuPipeline(
     }
 
     private fun renderLatchedFrame(
-        timestampNs: Long,
+        rawTimestampNs: Long,
         frameDataSpace: Int?,
         sourceReceivedAtMs: Long,
     ) {
+        val timestampNs = timestampBootMapper.mapToBoottimeNs(
+            rawTimestampNs,
+            android.os.SystemClock.elapsedRealtimeNanos(),
+            System.nanoTime(),
+        )
         lastSourceDataSpace = frameDataSpace
         if (shaderYcbcr && (ycbcrConversion == null || ycbcrDataSpace != frameDataSpace)) {
             ycbcrConversion = OpenCineLogYcbcrConversion.forDataSpace(frameDataSpace, sourcePath)
@@ -1707,6 +1758,7 @@ class OpenCineLogGpuPipeline(
                 draw(if (viewAssistEnabled) OUTPUT_VIEW_ASSIST else OUTPUT_FLAT_MONITOR, width, height, previewOutput = true)
                 frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.PREVIEW_DRAW)
                 check(EGL14.eglSwapBuffers(display, previewEglSurface)) { "Preview EGL swap failed." }
+                renderedPreviewFrames++
                 frameDiag?.mark(OpenCineLogFrameDiagnostics.Phase.PREVIEW_SWAP)
                 pendingOperatorLutStatus?.let(::reportOperatorLut)
             }.onFailure(::reportPreviewFailure)
@@ -1718,7 +1770,8 @@ class OpenCineLogGpuPipeline(
         val callback = onAnalysis ?: return
         val now = android.os.SystemClock.elapsedRealtime()
         val options = monitoringOptions
-        if (!scopeAnalysisDue(analysisSuspended, now, lastAnalysisAtMs, analysisPeriodMs(options.periodMs, analysisBurst))) return
+        val effectivePeriodMs = if ((recording != null || directPreviewReader != null) && targetFps >= 60) maxOf(options.periodMs, 500L) else options.periodMs
+        if (!scopeAnalysisDue(analysisSuspended, now, lastAnalysisAtMs, analysisPeriodMs(effectivePeriodMs, analysisBurst))) return
         lastAnalysisAtMs = now
         val peaking = focusPeakingEnabled
         val scale = if (peaking) PEAKING_ANALYSIS_SCALE else 1
@@ -2432,6 +2485,9 @@ class OpenCineLogGpuPipeline(
                     retireSubjectOutput()
                     destroyPreviewSurface()
                     if (encoderEglSurface != EGL14.EGL_NO_SURFACE) check(EGL14.eglDestroySurface(display, encoderEglSurface))
+                    directPreviewReader?.setOnImageAvailableListener(null, null)
+                    directPreviewReader?.close()
+                    directPreviewReader = null
                     zeroCopyImageReader?.setOnImageAvailableListener(null, null)
                     zeroCopyImageReader?.close()
                     surfaceTexture?.setOnFrameAvailableListener(null)
@@ -2476,7 +2532,7 @@ class OpenCineLogGpuPipeline(
         if (!accepted) retirement.completeExceptionally(IllegalStateException("GL close request was rejected"))
     }
 
-    private class EmbeddedAac(
+    internal class EmbeddedAac(
         val codec: MediaCodec,
         private val context: Context,
         private val input: PcmInput,
@@ -2861,7 +2917,7 @@ class OpenCineLogGpuPipeline(
         }
     }
 
-    private data class PendingMuxSample(
+    internal data class PendingMuxSample(
         val video: Boolean,
         val data: ByteArray,
         val presentationTimeUs: Long,
@@ -2870,8 +2926,8 @@ class OpenCineLogGpuPipeline(
 
     companion object {
         private val takeIds = java.util.concurrent.atomic.AtomicLong()
-        private const val CODEC_TIMEOUT_US = 20_000L
-        private const val CODEC_STOP_TIMEOUT_NS = 5_000_000_000L
+        internal const val CODEC_TIMEOUT_US = 20_000L
+        internal const val CODEC_STOP_TIMEOUT_NS = 5_000_000_000L
         private const val LOG_TAG = "OpenCineLogGpuPipeline"
         /**
          * Without an AudioTimestamp the PCM origin is estimated from the reads returning in this window after the
@@ -2931,7 +2987,7 @@ class OpenCineLogGpuPipeline(
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                 findEncoder(size, fps)?.codecName?.let(::requiresExplicitHevcLevel) == true
 
-        private fun hdrFormat(hdr10: Boolean) = if (hdr10) HdrVideoFormat.HDR10 else HdrVideoFormat.HLG
+        internal fun hdrFormat(hdr10: Boolean) = if (hdr10) HdrVideoFormat.HDR10 else HdrVideoFormat.HLG
 
         fun resolveBitratePlan(
             requestedTargetBps: Int,

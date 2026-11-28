@@ -387,6 +387,10 @@
     <string name="image_profile_standard">Standard</string>
     <string name="image_profile_flat">Flat</string>
     <string name="image_profile_cine">Cine</string>
+    <string name="image_huawei_smooth_color">Huawei Smooth ISP profile</string>
+    <string name="image_huawei_smooth_color_summary">Softens SDR video; adds contrast in 10-bit HLG (keep Off for max HLG latitude)</string>
+    <string name="image_huawei_smooth_color_help">Engages the camera processor tone profile (colorMode = 2) at zero GPU cost. Softens highlights and sharpening in SDR video; in 10-bit CUVA HLG it applies a punchier, higher-contrast curve. Leave Off for maximum dynamic range in HLG and LOG.</string>
+    <string name="panel_title_aperture">Aperture</string>
     <string name="image_picture_profile_help">Tone curve applied by the camera\'s image processor at no extra cost. Standard keeps the camera\'s own look; Flat lifts shadows and softens highlights for grading; Cine is a soft S-curve with a long highlight shoulder. Applies to SDR video, time-lapse and JPEG/HEIC photos, not to LOG, HLG, RAW or high-speed takes.</string>
     <string name="image_reset">Restore camera template</string>
     <string name="picture_controls_title">Picture controls</string>

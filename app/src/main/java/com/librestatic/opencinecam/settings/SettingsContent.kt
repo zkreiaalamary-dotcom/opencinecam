@@ -297,7 +297,7 @@ internal fun SettingsContent(
                 sliderModifier = Modifier.testTag("burst-count"))
         }
         if ("bitrate" in visibleIds) settingsCard("bitrate") {
-            SettingsOptionRow(stringResource(R.string.video_bitrate), null, listOf(12, 20, 40), settings.videoBitrateMbps,
+            SettingsOptionRow(stringResource(R.string.video_bitrate), null, CameraSettings.VIDEO_BITRATE_OPTIONS, settings.videoBitrateMbps,
                 label = { "$it Mbps" }, tag = { "video-bitrate-$it" }, onSelect = { onSettingsChange(settings.copy(videoBitrateMbps = it)) })
         }
         if ("video-codec" in visibleIds) settingsCard("video-codec") {

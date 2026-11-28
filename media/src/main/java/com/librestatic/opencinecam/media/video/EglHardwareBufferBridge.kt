@@ -58,6 +58,41 @@ object EglHardwareBufferBridge {
         return if (nativeReadAhbFormatAndUsage(buffer, out)) out[0].toInt() to out[1] else null
     }
 
+    fun bindTexture2D(imageHandle: Long): Int =
+        if (loaded && imageHandle != 0L) nativeBindTexture2D(imageHandle) else -1
+
+    fun inspectSurfaceWindow(surface: Surface): IntArray? {
+        if (!loaded) return null
+        val out = IntArray(3)
+        return if (nativeInspectSurfaceWindow(surface, out)) out else null
+    }
+
+    fun probeAnwFormatLockAndPost(
+        surface: Surface,
+        width: Int,
+        height: Int,
+        format: Int,
+        dataSpace: Int,
+        patternMode: Int,
+    ): Pair<Int, IntArray>? {
+        if (!loaded) return null
+        val stats = IntArray(6)
+        val rc = nativeProbeAnwFormatLockAndPost(surface, width, height, format, dataSpace, patternMode, stats)
+        return rc to stats
+    }
+
+    fun inspectAhbLockPlanes(buffer: HardwareBuffer, sampleBytes: Int = 64): Triple<Int, LongArray, Pair<IntArray, ByteArray>>? {
+        if (!loaded) return null
+        val meta = LongArray(6)
+        val planes = IntArray(12)
+        val sample = ByteArray(sampleBytes.coerceAtLeast(1))
+        val rc = nativeInspectAhbLockPlanes(buffer, meta, planes, sample)
+        return Triple(rc, meta, planes to sample)
+    }
+
+    fun probeVulkanAhb(ahbIn: HardwareBuffer?, ahbOut: HardwareBuffer? = null): String =
+        if (loaded) nativeProbeVulkanAhb(ahbIn, ahbOut) else "{\"ok\":false,\"error\":\"jni_not_loaded\"}"
+
     @JvmStatic private external fun nativeProbeExtensions(): Int
 
     @JvmStatic private external fun nativeCreateEglImage(hardwareBuffer: HardwareBuffer): Long
@@ -83,4 +118,27 @@ object EglHardwareBufferBridge {
     ): Int
 
     @JvmStatic private external fun nativeReadAhbFormatAndUsage(hardwareBuffer: HardwareBuffer, out2: LongArray): Boolean
+
+    @JvmStatic private external fun nativeBindTexture2D(imageHandle: Long): Int
+
+    @JvmStatic private external fun nativeInspectSurfaceWindow(surface: Surface, out3: IntArray): Boolean
+
+    @JvmStatic private external fun nativeProbeAnwFormatLockAndPost(
+        surface: Surface,
+        width: Int,
+        height: Int,
+        format: Int,
+        dataSpace: Int,
+        patternMode: Int,
+        outStats6: IntArray,
+    ): Int
+
+    @JvmStatic private external fun nativeInspectAhbLockPlanes(
+        hardwareBuffer: HardwareBuffer,
+        outMeta6: LongArray,
+        outPlanes12: IntArray,
+        sampleOut: ByteArray,
+    ): Int
+
+    @JvmStatic private external fun nativeProbeVulkanAhb(ahbIn: HardwareBuffer?, ahbOut: HardwareBuffer?): String
 }

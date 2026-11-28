@@ -85,7 +85,7 @@ import org.json.JSONObject
 internal object LabWaveCProbes {
     private const val HUAWEI_CUVA_VIDEO_MODE_KEY = "com.huawei.capture.metadata.cuvaStateVideoMode"
 
-    private fun <T> withWatchdogAndLogs(
+    internal fun <T> withWatchdogAndLogs(
         context: Context,
         outDir: File,
         block: (LabDiagnosticRecorder, CameraHealthWatchdog, () -> JSONObject) -> T,
@@ -127,7 +127,7 @@ internal object LabWaveCProbes {
         }
     }
 
-    private fun waitNaturalThermalCool(context: Context, outDir: File, maxShellC: Double = 36.5) {
+    internal fun waitNaturalThermalCool(context: Context, outDir: File, maxShellC: Double = 36.5) {
         val root = ResearchLaboratory.evidenceRoot(context)
         for (i in 0 until 20) {
             val s = sampleThermal(context, root, includePowerProfile = false)
@@ -138,7 +138,7 @@ internal object LabWaveCProbes {
         }
     }
 
-    private fun chooseConfig8(dpy: EGLDisplay, surfaceType: Int): EGLConfig {
+    internal fun chooseConfig8(dpy: EGLDisplay, surfaceType: Int): EGLConfig {
         val cfgs = arrayOfNulls<EGLConfig>(1); val n = IntArray(1)
         check(EGL14.eglChooseConfig(dpy, intArrayOf(
             EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
@@ -148,7 +148,7 @@ internal object LabWaveCProbes {
         return requireNotNull(cfgs[0])
     }
 
-    private fun linkProgram(vertSrc: String, fragSrc: String): Int {
+    internal fun linkProgram(vertSrc: String, fragSrc: String): Int {
         fun comp(type: Int, src: String): Int {
             val s = GLES30.glCreateShader(type)
             GLES30.glShaderSource(s, src); GLES30.glCompileShader(s)
@@ -741,7 +741,7 @@ void main(){ outColor = vec4(texture(uTexture, vec2(vTexCoord.x, 1.0 - vTexCoord
     // =========================================================================
     // Probe 16C: 10-bit EGLConfig -> OMX.hisi Main10 Precision & 9-Stop CUVA Curve
     // =========================================================================
-    private fun chooseEglConfigExact(
+    internal fun chooseEglConfigExact(
         dpy: EGLDisplay,
         red: Int,
         green: Int,

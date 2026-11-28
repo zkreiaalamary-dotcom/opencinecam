@@ -254,7 +254,7 @@ data class CameraSettings(
         require(torchStrengthLevel == null || torchStrengthLevel > 0)
         photoFlash.strength?.let { require(it > 0) }
         require(burstCount in 3..10)
-        require(videoBitrateMbps in setOf(12, 20, 40))
+        require(videoBitrateMbps in VIDEO_BITRATE_OPTIONS)
         require(audioSampleRateHz in setOf(44_100, 48_000, 88_200, 96_000, 192_000))
         require(audioChannels in 1..2)
         require(audioBitrateKbps in setOf(64, 96, 128, 160, 192, 256, 320))
@@ -270,6 +270,10 @@ data class CameraSettings(
         require(timelapseWidth > 0 && timelapseHeight > 0)
         require(validProjectRate(timelapseFps, timelapseFpsDenominator))
         require(validProjectRate(videoProjectNumerator, videoProjectDenominator))
+    }
+
+    companion object {
+        val VIDEO_BITRATE_OPTIONS = listOf(12, 20, 40, 60, 80, 100)
     }
 }
 
@@ -454,6 +458,7 @@ class CameraSettingsStore internal constructor(private val preferences: android.
             pictureProfile = enumPreference("image-picture-profile", PictureProfile.STANDARD),
             saturation = preferences.getInt("image-saturation", NO_DEVICE).takeUnless { it == NO_DEVICE },
             sharpness = preferences.getInt("image-sharpness", NO_DEVICE).takeUnless { it == NO_DEVICE },
+            huaweiSmoothColor = preferences.getBoolean("image-huawei-smooth-color", false),
         ),
         exposure = ExposureSelection(
             mode = enumPreference("exposure-mode", ExposureMode.AUTO),
@@ -464,6 +469,7 @@ class CameraSettingsStore internal constructor(private val preferences: android.
             antibanding = enumPreference("antibanding", Antibanding.AUTO),
             lowLightBoost = preferences.getBoolean("low-light-boost", false),
             metering = preferences.getString("exposure-metering", null)?.let { name -> ExposureMetering.entries.firstOrNull { it.name == name } },
+            apertureFNumber = preferences.getFloat("exposure-aperture-fnumber", -1f).takeIf { it.isFinite() && it > 0f },
         ),
         recordingWhiteBalance = runCatching { RecordingWhiteBalancePolicy.valueOf(preferences.getString("recording-white-balance", "CONTINUOUS") ?: "CONTINUOUS") }.getOrDefault(RecordingWhiteBalancePolicy.CONTINUOUS),
         whiteBalance = when (preferences.getString("white-balance-kind", "AUTO")) {
@@ -552,7 +558,7 @@ class CameraSettingsStore internal constructor(private val preferences: android.
             preferences.getInt(KEY_BRACKET_COUNT, 3).takeIf { it in setOf(3, 5, 7, 9) } ?: 3,
             enumPreference(KEY_BRACKET_STEP, com.librestatic.opencinecam.camera.BracketStep.TWO_EV)),
         burstCount = preferences.getInt(KEY_BURST, 5).coerceIn(3, 10),
-        videoBitrateMbps = preferences.getInt(KEY_BITRATE, 20).takeIf { it in setOf(12, 20, 40) } ?: 20,
+        videoBitrateMbps = preferences.getInt(KEY_BITRATE, 20).takeIf { it in CameraSettings.VIDEO_BITRATE_OPTIONS } ?: 20,
         videoCodec = enumPreference(KEY_VIDEO_CODEC, com.librestatic.opencinecam.media.video.VideoCodecPreference.AUTO),
         flashEnabled = preferences.getBoolean(KEY_FLASH, false),
         photoFlash = com.librestatic.opencinecam.camera.PhotoFlashSelection(
@@ -698,6 +704,7 @@ class CameraSettingsStore internal constructor(private val preferences: android.
             .putString("image-picture-profile", settings.imageProcessing.pictureProfile.name)
             .putInt("image-saturation", settings.imageProcessing.saturation ?: NO_DEVICE)
             .putInt("image-sharpness", settings.imageProcessing.sharpness ?: NO_DEVICE)
+            .putBoolean("image-huawei-smooth-color", settings.imageProcessing.huaweiSmoothColor)
             .putString("exposure-mode", settings.exposure.mode.name)
             .putInt("exposure-iso", settings.exposure.iso)
             .putLong("exposure-time-ns", settings.exposure.timeNs)
@@ -706,6 +713,7 @@ class CameraSettingsStore internal constructor(private val preferences: android.
             .putString("antibanding", settings.exposure.antibanding.name)
             .putBoolean("low-light-boost", settings.exposure.lowLightBoost)
             .putString("exposure-metering", settings.exposure.metering?.name)
+            .putFloat("exposure-aperture-fnumber", settings.exposure.apertureFNumber ?: -1f)
             .putString("recording-white-balance", settings.recordingWhiteBalance.name)
             .putString("white-balance-kind", when (settings.whiteBalance) {
                 is WhiteBalanceSelection.Auto -> "AUTO"

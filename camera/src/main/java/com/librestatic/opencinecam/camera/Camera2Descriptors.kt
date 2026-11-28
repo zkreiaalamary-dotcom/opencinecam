@@ -220,6 +220,7 @@ fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int, targetHe
         } else vendorKelvinRange
         val huaweiVendorKelvinWb = Build.VERSION.SDK_INT < 36 && vendorKelvinRange != null && kelvinRange != null
         val huaweiSmoothColorModeSupported = HuaweiVendorControls.supportsSmoothColorMode(characteristics)
+        val variableApertures = HuaweiVendorControls.variableApertures(characteristics)
         Camera2CameraDescriptor(
             cameraId = cameraId,
             timestampSourceRealtime = characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME,
@@ -287,6 +288,7 @@ fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int, targetHe
             kelvinRange = kelvinRange,
             huaweiVendorKelvinWb = huaweiVendorKelvinWb,
             huaweiSmoothColorModeSupported = huaweiSmoothColorModeSupported,
+            variableApertures = variableApertures,
             tintSupported = Build.VERSION.SDK_INT >= 36 && kelvinRange != null && characteristics.availableCaptureRequestKeys.contains(CaptureRequest.COLOR_CORRECTION_COLOR_TINT),
             awbLockSupported = characteristics.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true &&
                 CaptureRequest.CONTROL_AWB_LOCK in characteristics.availableCaptureRequestKeys,
@@ -318,10 +320,20 @@ fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int, targetHe
                 maxCurvePoints = characteristics.get(CameraCharacteristics.TONEMAP_MAX_CURVE_POINTS) ?: 0,
                 pictureControls = characteristics.pictureControlCapabilities(),
             ),
-            exposureCapabilities = ExposureCapabilities(
-                manual = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true,
-                isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let { it.lower..it.upper },
-                timeRangeNs = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)?.let { it.lower..it.upper },
+            exposureCapabilities = run {
+                val isoRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let { it.lower..it.upper }
+                val timeRangeNs = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)?.let { it.lower..it.upper }
+                val hasManualSensorCap = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)
+                ExposureCapabilities(
+                    manual = HuaweiVendorControls.supportsHuaweiManualExposureRaw(
+                        isHuawei = HuaweiVendorControls.isHuaweiDevice(),
+                        hasManualSensorCapability = hasManualSensorCap,
+                        aeAvailableModes = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES),
+                        isoRange = isoRange,
+                        timeRangeNs = timeRangeNs,
+                    ),
+                    isoRange = isoRange,
+                    timeRangeNs = timeRangeNs,
                 priorities = if (Build.VERSION.SDK_INT >= 36 && characteristics.availableCaptureRequestKeys.contains(CaptureRequest.CONTROL_AE_PRIORITY_MODE)) {
                     characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_PRIORITY_MODES)?.toList()?.mapNotNull { when (it) {
                         CaptureRequest.CONTROL_AE_PRIORITY_MODE_SENSOR_SENSITIVITY_PRIORITY -> ExposureMode.ISO_PRIORITY.takeIf { characteristics.availableCaptureRequestKeys.contains(CaptureRequest.SENSOR_SENSITIVITY) }
@@ -340,7 +352,7 @@ fun Camera2PreviewEngine.descriptor(cameraId: String, targetWidth: Int, targetHe
                 } }?.toSet().orEmpty(),
                 meteringModes = vendorMeteringModes(characteristics),
                 qcomExposureRangeNs = QcomExposurePriority.parseRange(VendorKeys.staticLongs(characteristics, QcomExposurePriority.RANGE_KEY)),
-            ),
+            ) },
             photoFlashCapabilities = run {
                 val available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
                 val modes = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES)?.toSet().orEmpty()

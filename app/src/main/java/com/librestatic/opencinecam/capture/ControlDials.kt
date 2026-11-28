@@ -129,6 +129,7 @@ private fun ExposureDial(
         if (!manual && !caps.supports(priority)) {
             PanelNote(stringResource(if (iso) R.string.exposure_manual_unavailable_iso else R.string.exposure_manual_unavailable_shutter),
                 Modifier.testTag("exposure-unavailable"))
+            ApertureSection(descriptor, state, settings, onSettingsChanged)
             return@PanelColumn
         }
         val (isoMin, isoMax, timeMin, timeMax) = exposureControlRanges(descriptor)
@@ -169,6 +170,29 @@ private fun ExposureDial(
             // AUTO hands the value back to the camera and keeps the panel open on the live reading.
             onAuto = { binder?.setManualExposure(null, null) },
         )
+        ApertureSection(descriptor, state, settings, onSettingsChanged)
+    }
+}
+
+@Composable
+private fun ApertureSection(
+    descriptor: com.librestatic.opencinecam.camera.Camera2CameraDescriptor,
+    state: CameraUiState,
+    settings: CameraSettings,
+    onSettingsChanged: (CameraSettings) -> Unit,
+) {
+    if (descriptor.variableApertures.isEmpty()) return
+    PanelSectionLabel(stringResource(R.string.panel_title_aperture))
+    val currentAperture = settings.exposure.apertureFNumber
+    val choices: List<Float?> = listOf<Float?>(null) + descriptor.variableApertures
+    ChoiceGrid(choices, minTileWidth = 72.dp, maxColumns = 5, balanced = true) { fNum, tileModifier ->
+        val selected = (fNum == null && currentAperture == null) ||
+            (fNum != null && currentAperture != null && abs(currentAperture - fNum) < 0.05f)
+        val label = if (fNum == null) stringResource(R.string.auto_value) else "f/$fNum"
+        val tag = if (fNum == null) "aperture-auto" else "aperture-${fNum.toString().replace('.', '_')}"
+        ChoiceTile(label, selected, tileModifier.testTag(tag), enabled = !state.structuralSettingsFrozen) {
+            onSettingsChanged(settings.copy(exposure = settings.exposure.copy(apertureFNumber = fNum)))
+        }
     }
 }
 

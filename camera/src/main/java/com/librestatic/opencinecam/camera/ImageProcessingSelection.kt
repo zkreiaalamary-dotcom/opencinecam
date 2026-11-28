@@ -10,6 +10,8 @@ data class ImageProcessingSelection(
     /** Qualcomm picture controls; null keeps the camera template (see PictureControls.kt). */
     val saturation: Int? = null,
     val sharpness: Int? = null,
+    /** Huawei Smooth ISP colorMode=2 when the camera supports it. */
+    val huaweiSmoothColor: Boolean = false,
 )
 /** CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION. */
 const val PREVIEW_STABILIZATION = 2

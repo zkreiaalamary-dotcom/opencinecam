@@ -44,8 +44,13 @@ data class ExposureSelection(
     val lowLightBoost: Boolean = false,
     /** Null leaves the device's own metering untouched. */
     val metering: ExposureMetering? = null,
+    /** Optical variable aperture f-number when the camera supports discrete stops; null = auto. */
+    val apertureFNumber: Float? = null,
 ) {
-    init { require(iso > 0 && timeNs > 0 && angleTenths in 1..3600) }
+    init {
+        require(iso > 0 && timeNs > 0 && angleTenths in 1..3600)
+        require(apertureFNumber == null || (apertureFNumber.isFinite() && apertureFNumber > 0f))
+    }
     fun requestedTimeNs(rate: CaptureFrameRate): Long = if (shutterUnit == ShutterUnit.TIME) timeNs else
         (1_000_000_000L * rate.denominator * angleTenths / (3600L * rate.numerator)).coerceAtLeast(1)
 }

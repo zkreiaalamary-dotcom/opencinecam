@@ -67,7 +67,7 @@ internal fun Camera2PreviewEngine.restoreContinuousFocusLocked() {
         },
     )
     runCatching {
-        configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+        configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
     }.onFailure {
         listener?.onControlRejected("tap-focus-restore-failed", it.message ?: "Continuous autofocus could not be restored.")
     }
@@ -125,13 +125,13 @@ internal fun Camera2PreviewEngine.reissueFaceDetect() {
     if (isHighSpeedSession()) return
     applyFaceDetect(builder)
     runCatching {
-        configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false))
+        configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false))
     }.onFailure {
         if (builder.get(CaptureRequest.STATISTICS_FACE_DETECT_MODE) == faceDetectModeFor(activeDescriptor) && subjectFramingRequested) {
             // The graph refused the key synchronously: remember that and continue without it.
             faceDetectGate.rejectActive()
             applyFaceDetect(builder)
-            runCatching { configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
+            runCatching { configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(activeDescriptor, false)) }
         }
         Log.w(TAG, "Face statistics request update failed; continuing without the out-of-frame warning.")
     }
@@ -220,11 +220,11 @@ internal fun Camera2PreviewEngine.startAfLockScan(descriptor: Camera2CameraDescr
         builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
         configured.captureSingleRequest(builder.build(), cameraExecutor, previewCaptureCallback(descriptor, false))
         builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-        configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(descriptor, false))
+        configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(descriptor, false))
         builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
         configured.captureSingleRequest(builder.build(), cameraExecutor, previewCaptureCallback(descriptor, false))
         builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
-        configured.setPhotoAwareRepeatingRequest(builder.build(), cameraExecutor, previewCaptureCallback(descriptor, false))
+        configured.setEngineRepeatingRequest(builder, cameraExecutor, previewCaptureCallback(descriptor, false))
     } catch (failure: Exception) {
         disableAfLock(notify = true)
         listener?.onControlRejected("af-lock-scan-failed", failure.message ?: "AF lock scan failed.")

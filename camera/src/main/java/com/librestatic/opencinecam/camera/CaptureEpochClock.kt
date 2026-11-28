@@ -195,3 +195,43 @@ class CaptureEpochClock(val cameraRealtime: Boolean, val sampleRateHz: Int? = nu
 /** Requested AAC needs captured PCM and encoded payload, not merely a track format or priming packet. */
 fun hasRequiredEncodedSamples(videoFrames: Long, audioPcmFrames: Long?, audioPackets: Long): Boolean =
     videoFrames > 0 && (audioPcmFrames == null || audioPcmFrames > 0 && audioPackets > 0)
+
+/**
+ * Normalizes Camera2 Surface/ImageReader timestamps onto `CLOCK_BOOTTIME` when a HAL advertises
+ * `SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME` (and stamps `CaptureResult.SENSOR_TIMESTAMP` on boot time)
+ * yet stamps `SurfaceTexture`/`Image.timestamp` on `CLOCK_MONOTONIC` (observed on Huawei Kirin
+ * EMUI 15 where `boot - mono` caused ~23,693 s audio `elst` offsets). Locks the per-session offset
+ * once on the first valid frame so jitter or sleep never shifts frame intervals mid-stream.
+ */
+class CameraTimestampBootMapper(private val cameraTimestampRealtime: Boolean) {
+    private var lockedOffsetNs: Long? = null
+
+    @Synchronized
+    fun mapToBoottimeNs(sourceNs: Long, nowBootNs: Long, nowMonoNs: Long): Long {
+        if (!cameraTimestampRealtime || sourceNs <= 0L) return sourceNs
+        val offset = lockedOffsetNs ?: run {
+            val bootDelta = kotlin.math.abs(nowBootNs - sourceNs)
+            val monoDelta = kotlin.math.abs(nowMonoNs - sourceNs)
+            val bootMinusMono = nowBootNs - nowMonoNs
+            val resolved = if (bootDelta > THRESHOLD_NS &&
+                monoDelta < THRESHOLD_NS &&
+                kotlin.math.abs(bootMinusMono) > THRESHOLD_NS
+            ) bootMinusMono else 0L
+            lockedOffsetNs = resolved
+            resolved
+        }
+        return sourceNs + offset
+    }
+
+    @Synchronized
+    fun reset() {
+        lockedOffsetNs = null
+    }
+
+    @Synchronized
+    fun appliedOffsetNs(): Long = lockedOffsetNs ?: 0L
+
+    companion object {
+        private const val THRESHOLD_NS = 2_000_000_000L
+    }
+}

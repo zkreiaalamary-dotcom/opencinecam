@@ -450,24 +450,34 @@ internal fun Camera2PreviewEngine.configureLogSession(
     device: CameraDevice,
     descriptor: Camera2CameraDescriptor,
     currentGeneration: Long,
+    onSessionReplaced: (() -> Unit)? = null,
 ) {
+    val notifyReplaced = java.util.concurrent.atomic.AtomicBoolean(false)
+    fun signalReplaced() {
+        if (notifyReplaced.compareAndSet(false, true)) onSessionReplaced?.invoke()
+    }
     val profile = activeLogProfile ?: run {
+        signalReplaced()
         listener?.onFailure("log-profile-missing", "The selected OCLog profile is unavailable.", false)
         return
     }
     if (profile.constrainedHighSpeed) {
+        signalReplaced()
         configureHighSpeedLogSession(device, descriptor, profile, currentGeneration)
         return
     }
     if (profile.sourcePath != OpenCineLogSourcePath.HLG10_BT2020) {
+        signalReplaced()
         listener?.onFailure("log-source-invalid", "Regular OCLog requires the HLG10 source path.", false)
         return
     }
     val input = logPipeline?.cameraInputSurface ?: run {
+        signalReplaced()
         listener?.onFailure("log-input-surface-missing", "The OCLog camera input surface is unavailable.", false)
         return
     }
     fun sessionException(failure: Throwable) {
+        signalReplaced()
         if (withdrawLensLock(LensLockUnavailable.CONFIGURE_FAILED)) return
         listener?.onFailure("log-session-exception", failure.message ?: "The HLG10 OCLog graph could not be created.", false)
     }
@@ -476,12 +486,16 @@ internal fun Camera2PreviewEngine.configureLogSession(
         output.setDynamicRangeProfile(DynamicRangeProfiles.HLG10)
     }
     applyStreamUse(output, descriptor, StreamRole.PREVIEW_AND_RECORDING)
+    val huaweiChars = if (profile.huaweiCuvaHdr) {
+        runCatching { manager.getCameraCharacteristics(descriptor.cameraId) }.getOrNull()
+    } else null
     val configuration = SessionConfiguration(
         SessionConfiguration.SESSION_REGULAR,
         listOf(output),
         cameraExecutor,
         object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(configured: CameraCaptureSession) {
+                signalReplaced()
                 if (currentGeneration != generation || !logPreviewEnabled) {
                     configured.close()
                     return
@@ -493,7 +507,10 @@ internal fun Camera2PreviewEngine.configureLogSession(
                         applyEngineRequest(EngineRequestMode.LOG_RECORD)
                         applyTargetFps(this, descriptor)
                         applyManualControls(this, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
-                        if (profile.huaweiCuvaHdr) applyHuaweiCuvaVideoMode(this, descriptor)
+                        if (profile.huaweiCuvaHdr) {
+                            applyHuaweiCuvaVideoMode(this, descriptor)
+                            HuaweiVendorControls.applyHighFpsCadenceLock(this, huaweiChars, descriptor.cameraId, requestedTargetFps)
+                        }
                     }
                     repeatingBuilder = builder
                     configured.setPhotoAwareRepeatingRequest(
@@ -509,6 +526,7 @@ internal fun Camera2PreviewEngine.configureLogSession(
             }
 
             override fun onConfigureFailed(configured: CameraCaptureSession) {
+                signalReplaced()
                 configured.close()
                 if (currentGeneration != generation || !logPreviewEnabled) return
                 if (withdrawLensLock(LensLockUnavailable.CONFIGURE_FAILED)) return
@@ -527,10 +545,194 @@ internal fun Camera2PreviewEngine.configureLogSession(
                     applyDynamicFpsSession(this)
                     applyTargetFps(this, descriptor)
                     applyHuaweiCuvaVideoMode(this, descriptor)
+                    if (descriptor.variableApertures.isNotEmpty()) {
+                        HuaweiVendorControls.applyVariableAperture(this, huaweiChars, descriptor.cameraId, professionalExposure?.apertureFNumber)
+                    }
+                    HuaweiVendorControls.applyHighFpsCadenceLock(this, huaweiChars, descriptor.cameraId, requestedTargetFps)
                 }.build(),
             )
+        } else {
+            configureProcessingSession(configuration, device, CameraDevice.TEMPLATE_RECORD)
         }
-        configureProcessingSession(configuration, device, CameraDevice.TEMPLATE_RECORD)
+        createSessionRetryingWithoutStreamUse(
+            device, descriptor, configuration,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !profile.huaweiCuvaHdr) ColorSpace.Named.BT2020_HLG else null,
+        )
+    } catch (failure: Throwable) {
+        sessionException(failure)
+    }
+}
+
+/**
+ * Dual-surface HLG10 Camera2 session feeding [codecSurface] (0x324 HEVC Main10 encoder input directly,
+ * Stream 0) and [previewInput] (preview surface for GL viewfinder & scopes, Stream 1).
+ */
+internal fun Camera2PreviewEngine.configureDirect10BitLogSession(
+    device: CameraDevice,
+    descriptor: Camera2CameraDescriptor,
+    currentGeneration: Long,
+    previewInput: Surface,
+    codecSurface: Surface,
+    ownsTake: () -> Boolean,
+    onConfiguredSuccess: () -> Unit,
+    onConfigureFailure: (Throwable?) -> Unit,
+) {
+    val profile = activeLogProfile ?: run {
+        onConfigureFailure(IllegalStateException("The selected OCLog profile is unavailable."))
+        return
+    }
+    fun sessionException(failure: Throwable) {
+        onConfigureFailure(failure)
+    }
+    val codecOutput = sessionOutput(codecSurface, ::sessionException) ?: return
+    val previewOutput = sessionOutput(previewInput, ::sessionException) ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        codecOutput.setDynamicRangeProfile(DynamicRangeProfiles.HLG10)
+        previewOutput.setDynamicRangeProfile(DynamicRangeProfiles.HLG10)
+    }
+    applyStreamUse(codecOutput, descriptor, StreamRole.RECORDING)
+    applyStreamUse(previewOutput, descriptor, StreamRole.PREVIEW)
+    val huaweiChars = if (profile.huaweiCuvaHdr) {
+        runCatching { manager.getCameraCharacteristics(descriptor.cameraId) }.getOrNull()
+    } else null
+    val needsVaSettle = profile.huaweiCuvaHdr &&
+        descriptor.variableApertures.isNotEmpty() &&
+        professionalExposure?.apertureFNumber != null
+    val configuration = SessionConfiguration(
+        SessionConfiguration.SESSION_REGULAR,
+        listOf(codecOutput, previewOutput),
+        cameraExecutor,
+        object : CameraCaptureSession.StateCallback() {
+            override fun onConfigured(configured: CameraCaptureSession) {
+                if (currentGeneration != generation || !logPreviewEnabled || !ownsTake()) {
+                    configured.close()
+                    onConfigureFailure(null)
+                    return
+                }
+                session = configured
+                fun armDirectRecording() {
+                    if (currentGeneration != generation || !logPreviewEnabled || !ownsTake() || session !== configured) return
+                    if (requestedTargetFps >= 60) direct10BitDecimatedPreviewSurface = previewInput
+                    val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        addTarget(codecSurface)
+                        addTarget(previewInput)
+                        applyEngineRequest(EngineRequestMode.LOG_RECORD)
+                        applyTargetFps(this, descriptor)
+                        applyManualControls(this, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        if (profile.huaweiCuvaHdr) {
+                            applyHuaweiCuvaVideoMode(this, descriptor)
+                            HuaweiVendorControls.applyHighFpsCadenceLock(this, huaweiChars, descriptor.cameraId, requestedTargetFps)
+                        }
+                    }
+                    repeatingBuilder = builder
+                    onConfiguredSuccess()
+                    configured.setEngineRepeatingRequest(
+                        builder,
+                        cameraExecutor,
+                        previewCaptureCallback(descriptor, true),
+                    )
+                    notifyZoomRange()
+                }
+                try {
+                    if (!needsVaSettle) {
+                        armDirectRecording()
+                        return
+                    }
+                    // Pre-record preview-only settle so Kirin HAL finishes its Frame-5 iris
+                    // homing while neutral (0f) and then locks the 0f -> targetFNumber edge
+                    // transition before codecSurface receives Frame 0.
+                    val warmupBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        addTarget(previewInput)
+                        applyEngineRequest(EngineRequestMode.LOG_RECORD)
+                        applyTargetFps(this, descriptor)
+                        applyManualControls(this, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                        applyHuaweiCuvaVideoMode(this, descriptor)
+                        HuaweiVendorControls.applyHighFpsCadenceLock(this, huaweiChars, descriptor.cameraId, requestedTargetFps)
+                        HuaweiVendorControls.applyVariableAperture(this, huaweiChars, descriptor.cameraId, null)
+                    }
+                    repeatingBuilder = warmupBuilder
+                    var phase = 1
+                    var phaseFrames = 0
+                    var phaseStartMs = SystemClock.elapsedRealtime()
+                    val warmupCallback = object : CameraCaptureSession.CaptureCallback() {
+                        private fun advanceWarmup() {
+                            if (phase >= 3) return
+                            if (currentGeneration != generation || !logPreviewEnabled || !ownsTake() || session !== configured) return
+                            try {
+                                phaseFrames++
+                                val elapsed = SystemClock.elapsedRealtime() - phaseStartMs
+                                if (phase == 1 && phaseFrames >= 7 && elapsed >= 230L) {
+                                    phase = 2
+                                    phaseFrames = 0
+                                    phaseStartMs = SystemClock.elapsedRealtime()
+                                    applyManualControls(warmupBuilder, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                    configured.setSingleRepeatingRequest(warmupBuilder.build(), cameraExecutor, this)
+                                } else if (phase == 2 && phaseFrames >= 6 && elapsed >= 180L) {
+                                    phase = 3
+                                    armDirectRecording()
+                                }
+                            } catch (failure: Throwable) {
+                                phase = 3
+                                onConfigureFailure(failure)
+                            }
+                        }
+
+                        override fun onCaptureCompleted(
+                            session: CameraCaptureSession,
+                            request: CaptureRequest,
+                            result: TotalCaptureResult,
+                        ) {
+                            advanceWarmup()
+                        }
+
+                        override fun onCaptureFailed(
+                            session: CameraCaptureSession,
+                            request: CaptureRequest,
+                            failure: CaptureFailure,
+                        ) {
+                            advanceWarmup()
+                        }
+                    }
+                    configured.setSingleRepeatingRequest(warmupBuilder.build(), cameraExecutor, warmupCallback)
+                } catch (failure: Throwable) {
+                    onConfigureFailure(failure)
+                }
+            }
+
+            override fun onReady(configured: CameraCaptureSession) = onRecorderSessionReady(configured)
+
+            override fun onConfigureFailed(configured: CameraCaptureSession) {
+                configured.close()
+                if (currentGeneration != generation || !logPreviewEnabled || !ownsTake()) return
+                onConfigureFailure(IllegalStateException("CameraService rejected the Direct 10-bit HLG dual-surface session."))
+            }
+        },
+    )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !profile.huaweiCuvaHdr) {
+        configuration.setColorSpace(ColorSpace.Named.BT2020_HLG)
+    }
+    try {
+        if (profile.huaweiCuvaHdr) {
+            configuration.setSessionParameters(
+                device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                    applyImageProcessing(this)
+                    applyDynamicFpsSession(this)
+                    applyTargetFps(this, descriptor)
+                    applyHuaweiCuvaVideoMode(this, descriptor)
+                    if (descriptor.variableApertures.isNotEmpty()) {
+                        HuaweiVendorControls.applyVariableAperture(
+                            this,
+                            huaweiChars,
+                            descriptor.cameraId,
+                            if (needsVaSettle) null else professionalExposure?.apertureFNumber,
+                        )
+                    }
+                    HuaweiVendorControls.applyHighFpsCadenceLock(this, huaweiChars, descriptor.cameraId, requestedTargetFps)
+                }.build(),
+            )
+        } else {
+            configureProcessingSession(configuration, device, CameraDevice.TEMPLATE_RECORD)
+        }
         createSessionRetryingWithoutStreamUse(
             device, descriptor, configuration,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !profile.huaweiCuvaHdr) ColorSpace.Named.BT2020_HLG else null,

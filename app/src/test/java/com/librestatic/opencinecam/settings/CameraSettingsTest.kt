@@ -48,6 +48,21 @@ class CameraSettingsTest {
         assertEquals(before, before.withLivePreferencesFrom(next))
     }
 
+    @Test fun videoBitrateOptionsSupportCinemaRatesAndApertureSmoothPersist() {
+        assertEquals(listOf(12, 20, 40, 60, 80, 100), CameraSettings.VIDEO_BITRATE_OPTIONS)
+        for (rate in CameraSettings.VIDEO_BITRATE_OPTIONS) {
+            assertEquals(rate, CameraSettings(videoBitrateMbps = rate).videoBitrateMbps)
+        }
+        val custom = CameraSettings(
+            videoBitrateMbps = 80,
+            exposure = com.librestatic.opencinecam.camera.ExposureSelection(apertureFNumber = 1.6f),
+            imageProcessing = com.librestatic.opencinecam.camera.ImageProcessingSelection(huaweiSmoothColor = true),
+        )
+        assertEquals(80, custom.videoBitrateMbps)
+        assertEquals(1.6f, custom.exposure.apertureFNumber)
+        assertTrue(custom.imageProcessing.huaweiSmoothColor)
+    }
+
     @Test
     fun defaultsAreSafeForFoldedLogPreflight() {
         val settings = CameraSettings()
