@@ -26,6 +26,7 @@ class AstraLogShaderTest {
                 )
                 assertTrue(shader.contains("astraLens(inverseHlg("))
                 assertTrue(shader.contains("return polarity * mix"))
+                assertTrue(shader.contains("return mix(highPart, lowPart, low);"))
                 assertTrue(shader.contains("ditheredOcLog"))
                 assertFalse(shader.contains("clamp(uYcbcrToRgb"))
                 assertFalse(shader.contains("lensEncode("))

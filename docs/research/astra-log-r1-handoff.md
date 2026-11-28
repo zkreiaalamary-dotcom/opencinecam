@@ -1,5 +1,9 @@
 # OpenCineCam — Astra LOG R1
 
+## Release ref and correction
+
+The immutable `astra-log-r1` tag points to `fa592286d5c31ef18200beb285ab02f88ca65ae9`. Its host shader integration test exposed a duplicate pattern shared by inverse HLG and the display OETF. Use the branch revision with “Fix Astra live shader generation after the first CI run” for device testing. That correction scopes text generation to the HLG decoder and verifies the display OETF remains unchanged. The original tag is retained for reproducibility.
+
 ## Baseline and scope
 
 This research branch starts at `b8b919623c91f6ae6d5f4940a4b55c48ef224572` on `research/autonomous-log-lab`. It includes Wave D Milestones 1 and 2 and the initial Milestone 3 code, including the direct Main10 HLG graph, vendor cadence changes, source-primaries selection, OCLog3 v1 reference, and technical LUTs. Astra is the specialized LOG branch. The autonomous lab can continue shipping camera, device and field-test changes independently.

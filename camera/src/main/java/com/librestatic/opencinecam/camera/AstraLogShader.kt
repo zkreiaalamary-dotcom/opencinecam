@@ -12,9 +12,15 @@ internal fun astraRecordingGreyReference(
 /** CUVA preprocessing keeps intermediate values extended until the OCLog2 transport or display transform. */
 internal object AstraLogShader {
     fun hlg(shader: String, lens: Boolean, shaderYcbcr: Boolean): String {
-        val signedHlg = shader
+        // The display OETF shares the same mix expression. Limit the edit to the HLG decoder.
+        val decoderStart = shader.indexOf("vec3 inverseHlg(vec3 e) {")
+        check(decoderStart >= 0) { "Astra HLG decoder is missing" }
+        val decoderEnd = shader.indexOf('}', startIndex = decoderStart)
+        check(decoderEnd > decoderStart) { "Astra HLG decoder body is incomplete" }
+        val decoder = shader.substring(decoderStart, decoderEnd)
             .replaceOnce("e = clamp(e, 0.0, 1.0);", "vec3 polarity = sign(e); e = abs(e);")
             .replaceOnce("return mix(highPart, lowPart, low);", "return polarity * mix(highPart, lowPart, low);")
+        val signedHlg = shader.replaceRange(decoderStart, decoderEnd, decoder)
         if (!lens) return signedHlg
 
         val sample = if (shaderYcbcr) "(uYcbcrToRgb * (texture(uTexture, vTexCoord).rgb - uYcbcrOffset))"
