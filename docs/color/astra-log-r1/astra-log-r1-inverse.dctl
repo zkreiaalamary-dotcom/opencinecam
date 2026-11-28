@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+// opencinecam.astra-log-r1.float.v1 -> scene-linear BT.2020 D65
+__DEVICE__ float astra_inverse(float code) {
+    const float black = 0.095f;
+    const float slope = 5.570237810615516f;
+    if (code < black) return -(0.02f / slope) * (_expf((black - code) / 0.02f) - 1.0f);
+    if (code < black + 0.008f * slope) return (code - black) / slope;
+    return _expf((code - 0.5935536972214088f) / 0.11770578833655286f) - 0.013131196250227292f;
+}
+
+__DEVICE__ float3 transform(int width, int height, int x, int y, float r, float g, float b) {
+    return make_float3(astra_inverse(r), astra_inverse(g), astra_inverse(b));
+}

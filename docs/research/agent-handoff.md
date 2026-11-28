@@ -1,5 +1,7 @@
 # OpenCineCam Engineering Handoff — Huawei Pura 80 Pro (`LMR-LX9`)
 
+> **Astra LOG R1** is the specialized LOG development on `research/astra-log-r1`, based on `b8b91962` with Wave D M2 and initial M3. See the [Astra engineering handoff](astra-log-r1-handoff.md) for live CUVA, offline HLG conversion, qualification and merge boundaries. The autonomous lab can carry newer work outside LOG.
+
 **Last updated:** 2026-11-28 (Post Wave D Milestone 2 Hardware Verification; Entering Wave D Milestone 3 Offline Engineering)  
 **Target device:** Huawei Pura 80 Pro (`LMR-LX9`, Kirin 9020, EMUI 15, Android API 31)  
 **Active research branch:** `research/autonomous-log-lab`  

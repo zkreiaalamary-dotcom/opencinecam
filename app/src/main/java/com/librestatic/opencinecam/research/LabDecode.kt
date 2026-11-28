@@ -13,7 +13,6 @@ import android.media.MediaMetadataRetriever
 import java.io.File
 import java.nio.ByteOrder
 import java.security.MessageDigest
-import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -183,7 +182,9 @@ private fun decodeCodedLumaFrames(
                                 pixelStride = image.planes[0].pixelStride
                                 rowStride = image.planes[0].rowStride
                             }
-                            val downsampled = downsampleCodedLuma(image, 192)
+                            val packing = codedLumaPacking(image) ?: return@use
+                            val downsampled = downsampleCodedLuma(image, packing, 192)
+                            if (downsampled.isEmpty()) return@use
                             if (frameIndex == 10) consecFrameA = downsampled
                             if (frameIndex == 11) consecFrameB = downsampled
                             if (wantTarget || (frameIndex == 5 && codedSamples.length() == 0)) {
@@ -200,7 +201,7 @@ private fun decodeCodedLumaFrames(
                                     ))
                                 }
                                 if (measureRamp && rampMetrics == null) {
-                                    rampMetrics = extractTopRightRampMetrics(image)
+                                    rampMetrics = extractTopRightRampMetrics(image, packing)
                                 }
                             }
                         }
@@ -242,6 +243,7 @@ private fun decodeCodedLumaFrames(
                     "minPositiveStep" to it.minPositiveStep,
                     "mod4ZeroFraction" to it.mod4ZeroFraction,
                     "effectiveBitsEstimate" to it.effectiveBitsEstimate,
+                    "precisionScope" to "decoded-luma-code-occupancy; not source precision",
                 )
             },
         )
@@ -252,7 +254,16 @@ private fun decodeCodedLumaFrames(
     }
 }
 
-private fun downsampleCodedLuma(image: Image, targetMaxDim: Int): IntArray {
+private fun codedLumaPacking(image: Image): LabLumaPacking? {
+    val stride = image.planes.firstOrNull()?.pixelStride ?: return null
+    return when (image.format) {
+        ImageFormat.YUV_420_888 -> LabLumaPacking.YUV8.takeIf { stride == 1 }
+        LabApiCompat.FORMAT_YCBCR_P010 -> LabLumaPacking.P010_MSB.takeIf { stride >= 2 }
+        else -> null
+    }
+}
+
+private fun downsampleCodedLuma(image: Image, packing: LabLumaPacking, targetMaxDim: Int): IntArray {
     val w = image.width
     val h = image.height
     val sw = targetMaxDim.coerceAtMost(w).coerceAtLeast(4)
@@ -261,51 +272,34 @@ private fun downsampleCodedLuma(image: Image, targetMaxDim: Int): IntArray {
     val buf = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
     val rowStride = plane.rowStride
     val pixelStride = plane.pixelStride
-    val is16Bit = pixelStride >= 2 || image.format == LabApiCompat.FORMAT_YCBCR_P010
     val out = IntArray(sw * sh)
     for (sy in 0 until sh) {
         val y = (sy * h) / sh
         for (sx in 0 until sw) {
             val x = (sx * w) / sw
             val offset = y * rowStride + x * pixelStride
-            val luma8 = if (is16Bit && offset + 1 < buf.limit()) {
-                val raw = buf.getShort(offset).toInt() and 0xFFFF
-                // P010 puts 10-bit code in top 10 bits; 10-bit LSB puts code in bottom 10 bits.
-                if (raw > 1023) (raw ushr 8) and 255 else ((raw * 255.0) / 1023.0).roundToInt().coerceIn(0, 255)
-            } else if (offset < buf.limit()) {
-                buf.get(offset).toInt() and 0xFF
-            } else 0
+            val luma8 = packing.previewCode(packing.read(buf, offset) ?: return IntArray(0))
             out[sy * sw + sx] = (luma8 shl 16) or (luma8 shl 8) or luma8
         }
     }
     return out
 }
 
-private fun extractTopRightRampMetrics(image: Image): RampPrecisionMetrics {
+private fun extractTopRightRampMetrics(image: Image, packing: LabLumaPacking): RampPrecisionMetrics? {
     val plane = image.planes[0]
     val buf = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
     val rowStride = plane.rowStride
     val pixelStride = plane.pixelStride
-    val is16Bit = pixelStride >= 2 || image.format == LabApiCompat.FORMAT_YCBCR_P010
     val yRow = (image.height / 4).coerceIn(0, image.height - 1)
     val xStart = image.width / 2 + 8
     val xEnd = (image.width - 8).coerceAtLeast(xStart + 1)
     val values = IntArray(xEnd - xStart)
-    var maxSeen = 0
     for (i in values.indices) {
         val x = xStart + i
         val off = yRow * rowStride + x * pixelStride
-        val v = if (is16Bit && off + 1 < buf.limit()) {
-            buf.getShort(off).toInt() and 0xFFFF
-        } else if (off < buf.limit()) {
-            buf.get(off).toInt() and 0xFF
-        } else 0
-        if (v > maxSeen) maxSeen = v
-        values[i] = v
+        values[i] = packing.read(buf, off) ?: return null
     }
-    val declared = if (is16Bit) 10 else 8
-    val normalized = if (is16Bit && maxSeen > 1023) IntArray(values.size) { values[it] ushr 6 } else values
-    return analyzeRampPrecision(normalized, declared)
+    return analyzeRampPrecision(values, packing.bits)
 }
 
 internal fun clipSha256(file: File): String {
