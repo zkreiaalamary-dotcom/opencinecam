@@ -1,0 +1,113 @@
+name: Astra LOG R1 qualification
+
+on:
+  push:
+    branches: [research/astra-log-r1]
+
+permissions:
+  contents: read
+
+jobs:
+  reference:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run independent color and conversion tests
+        run: node --test tools/tests/test_astra_log_r1.mjs
+
+  tag:
+    if: github.event.head_commit.message == 'Release Astra LOG R1'
+    needs: reference
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create the fixed Astra release ref
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASTRA_COMMIT: ${{ github.sha }}
+          ASTRA_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if current=$(gh api "repos/$ASTRA_REPO/git/ref/tags/astra-log-r1" --jq .object.sha); then
+            test "$current" = "$ASTRA_COMMIT"
+          else
+            gh api --method POST "repos/$ASTRA_REPO/git/refs" \
+              -f ref=refs/tags/astra-log-r1 -f "sha=$ASTRA_COMMIT" --jq .ref
+          fi
+
+  build:
+    needs: reference
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install Android SDK and native build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_dir="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$RUNNER_TEMP/android-sdk}}"
+          tools_dir="$sdk_dir/cmdline-tools/opencinecam-20"
+          archive="$RUNNER_TEMP/android-command-line-tools.zip"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://dl.google.com/android/repository/commandlinetools-linux-14742923_latest.zip \
+            --output "$archive"
+          echo "48833c34b761c10cb20bcd16582129395d121b27  $archive" | sha1sum --check
+          mkdir -p "$sdk_dir/cmdline-tools"
+          unzip -q "$archive" -d "$RUNNER_TEMP/opencinecam-sdk-tools"
+          mv "$RUNNER_TEMP/opencinecam-sdk-tools/cmdline-tools" "$tools_dir"
+          sdkmanager="$tools_dir/bin/sdkmanager"
+          if [[ ! -f "$sdk_dir/licenses/android-sdk-license" ]]; then
+            set +o pipefail
+            yes | "$sdkmanager" --sdk_root="$sdk_dir" --licenses >/dev/null
+            set -o pipefail
+          fi
+          "$sdkmanager" --sdk_root="$sdk_dir" --install \
+            "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+          echo "ANDROID_HOME=$sdk_dir" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk_dir" >> "$GITHUB_ENV"
+      - name: Build debug APK
+        shell: bash
+        run: |
+          args=()
+          if [[ "$GITHUB_REF_NAME" == research/* ]]; then
+            args+=(-Popencinecam.researchLab=true)
+          fi
+          ./gradlew --no-daemon --dependency-verification=strict --console=plain "${args[@]}" :app:assembleDebug --stacktrace
+      - name: Verify APK and calculate hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          build_tools="$ANDROID_SDK_ROOT/build-tools/37.0.0"
+          "$build_tools/apksigner" verify --verbose "$apk"
+          mkdir -p apk-output
+          name=OpenCineCam-Pura-debug.apk
+          if [[ "$GITHUB_REF_NAME" == research/* ]]; then
+            "$build_tools/aapt" dump badging "$apk" > apk-output/manifest.txt
+            grep -F "package: name='com.librestatic.opencinecam.researchlab'" apk-output/manifest.txt
+            name=OpenCineCam-Astra-LOG-R1.apk
+          fi
+          cp "$apk" "apk-output/$name"
+          (cd apk-output && sha256sum "$name" > SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: OpenCineCam-Astra-LOG-R1
+          path: apk-output/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Run host regression tests
+        if: startsWith(github.ref_name, 'research/')
+        run: ./gradlew -Popencinecam.researchLab=true --no-daemon --dependency-verification=strict --console=plain :core:model:test :camera:testDebugUnitTest :media:testDebugUnitTest :app:testDebugUnitTest
