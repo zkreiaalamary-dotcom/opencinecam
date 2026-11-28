@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+// OpenCineCam OCLog2 (BT.2020) to ACEScct (AP1)
+__DEVICE__ float decode_log(float y) {
+    y = _clampf(y, 0.10f, 0.90f);
+    return (_powf(51.0f, (y - 0.10f) / 0.80f) - 1.0f) / 50.0f;
+}
+__DEVICE__ float encode_target(float x) {
+    x = _fmaxf(0.0f, x);
+    if (x <= 0.0078125f) return 10.5402377416545f * x + 0.0729055341958355f;
+    return (_log2f(x) + 9.72f) / 17.52f;
+}
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+    float lr = decode_log(p_R);
+    float lg = decode_log(p_G);
+    float lb = decode_log(p_B);
+    float tr = 0.974894980f * lr + 0.019599110f * lg + 0.005505910f * lb;
+    float tg = 0.002179560f * lr + 0.995535470f * lg + 0.002284970f * lb;
+    float tb = 0.004797240f * lr + 0.024532020f * lg + 0.970670750f * lb;
+    return make_float3(encode_target(tr), encode_target(tg), encode_target(tb));
+}

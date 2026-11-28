@@ -70,3 +70,32 @@ class ColorScopeComputer(
         return ScopeComputation.Computed(Histogram(bins, frame.luma.size), ColorScopeOverlay(zebra, falseColor, thresholds))
     }
 }
+
+/**
+ * Calibrated IRE/threshold anchors per signal domain so false color, zebra, and middle-grey
+ * guides reflect the active encoding (BT.2020 LOG/HLG vs BT.709 SDR).
+ */
+object MonitoringDomainReference {
+    fun defaultThresholds(domain: MonitoringSignalDomain): ScopeThresholds = when (domain) {
+        MonitoringSignalDomain.OCLOG2_CODE -> ScopeThresholds(black = 0.105, shadow = 0.24, highlight = 0.78, clip = 0.895)
+        MonitoringSignalDomain.HLG10_BT2020_CODE -> ScopeThresholds(black = 0.065, shadow = 0.22, highlight = 0.75, clip = 0.915)
+        MonitoringSignalDomain.SDR_BT709_CODE,
+        MonitoringSignalDomain.ISP_YUV_ESTIMATED_SDR -> ScopeThresholds()
+    }
+
+    /** Nominal 18% middle-grey code position [0, 1] in the active signal domain. */
+    fun middleGreyCode(domain: MonitoringSignalDomain): Double = when (domain) {
+        MonitoringSignalDomain.OCLOG2_CODE -> OpenCineLog2Curve.encode(0.18)
+        MonitoringSignalDomain.HLG10_BT2020_CODE -> OpenCineLogGreyReference.HLG_REFERENCE_GREY_SIGNAL
+        MonitoringSignalDomain.SDR_BT709_CODE,
+        MonitoringSignalDomain.ISP_YUV_ESTIMATED_SDR -> 0.4090077288685503
+    }
+
+    /** Stops of diffuse highlight headroom above 18% middle grey for full-scale signal 1.0. */
+    fun ettrHighlightHeadroomStops(domain: MonitoringSignalDomain): Double = when (domain) {
+        MonitoringSignalDomain.OCLOG2_CODE -> 2.473931188332412
+        MonitoringSignalDomain.HLG10_BT2020_CODE -> 4.376810755679564
+        MonitoringSignalDomain.SDR_BT709_CODE,
+        MonitoringSignalDomain.ISP_YUV_ESTIMATED_SDR -> 2.473931188332412
+    }
+}

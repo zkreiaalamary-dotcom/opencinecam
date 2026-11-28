@@ -1,0 +1,21 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+// OpenCineCam OCLog3 (BT.2020) to DaVinci Wide Gamut / Intermediate
+__DEVICE__ float decode_log(float y) {
+    y = _clampf(y, 0.095000f, 0.920000f);
+    if (y < 0.139561902484924f) return _fmaxf(0.0f, (y - 0.095000f) / 5.570237810615516f);
+    return _fmaxf(0.0f, _fminf(16.0f, _expf((y - 0.593553697221409f) / 0.117705788336553f) - 0.013131196250227f));
+}
+__DEVICE__ float encode_target(float x) {
+    x = _fmaxf(0.0f, x);
+    if (x <= 0.00262409f) return x * 10.44426855f;
+    return (_log2f(x + 0.0075f) + 7.0f) * 0.07329248f;
+}
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+    float lr = decode_log(p_R);
+    float lg = decode_log(p_G);
+    float lb = decode_log(p_B);
+    float tr = 0.892112934f * lr + 0.024374439f * lg + 0.083522690f * lb;
+    float tg = 0.032620133f * lr + 0.786135855f * lg + 0.181241967f * lb;
+    float tb = 0.069968834f * lr + 0.104741719f * lg + 0.825266472f * lb;
+    return make_float3(encode_target(tr), encode_target(tg), encode_target(tb));
+}

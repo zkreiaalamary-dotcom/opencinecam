@@ -1,0 +1,831 @@
+{
+  "clips_count": 13,
+  "clips": [
+    {
+      "file": "m2_dual_4k30.mp4",
+      "container": {
+        "size_bytes": 14429672,
+        "duration_s": 2.9976,
+        "bit_rate": 38509933
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "37500/1249",
+        "nb_frames": 90,
+        "bit_rate": 38500781,
+        "start_time_s": 0.0,
+        "duration_s": 2.9976
+      },
+      "audio": null,
+      "av_start_delta_s": null,
+      "pts_cadence": {
+        "packet_count": 90,
+        "nominal_fps": 30,
+        "real_fps": 30.0238,
+        "median_dt_ms": 33.278,
+        "max_dt_ms": 33.423,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 993,
+        "sub_lsb_y_pct": 74.965,
+        "mean_y": 484.788,
+        "p5_y": 74,
+        "p50_y": 482,
+        "p95_y": 863,
+        "p99_y": 897,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 376.47
+      }
+    },
+    {
+      "file": "m2_dual_4k60.mp4",
+      "container": {
+        "size_bytes": 19705584,
+        "duration_s": 3.003556,
+        "bit_rate": 52486010
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "5400000/90107",
+        "nb_frames": 180,
+        "bit_rate": 52476885,
+        "start_time_s": 0.0,
+        "duration_s": 3.003556
+      },
+      "audio": null,
+      "av_start_delta_s": null,
+      "pts_cadence": {
+        "packet_count": 180,
+        "nominal_fps": 60,
+        "real_fps": 59.9288,
+        "median_dt_ms": 16.689,
+        "max_dt_ms": 16.789,
+        "gap_threshold_ms": 25.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 941,
+        "sub_lsb_y_pct": 75.335,
+        "mean_y": 437.156,
+        "p5_y": 77,
+        "p50_y": 383,
+        "p95_y": 875,
+        "p99_y": 902,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 429.554
+      }
+    },
+    {
+      "file": "m2_prod_ap_auto.mp4",
+      "container": {
+        "size_bytes": 15234918,
+        "duration_s": 2.467433,
+        "bit_rate": 49395198
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "90000/3001",
+        "nb_frames": 74,
+        "bit_rate": 49384074,
+        "start_time_s": 0.0,
+        "duration_s": 2.467433
+      },
+      "audio": null,
+      "av_start_delta_s": null,
+      "pts_cadence": {
+        "packet_count": 74,
+        "nominal_fps": 30,
+        "real_fps": 29.99,
+        "median_dt_ms": 33.344,
+        "max_dt_ms": 33.345,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 986,
+        "sub_lsb_y_pct": 74.949,
+        "mean_y": 456.029,
+        "p5_y": 67,
+        "p50_y": 397,
+        "p95_y": 865,
+        "p99_y": 896,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 357.006
+      },
+      "luma_timeline": {
+        "0.05s": 457.44,
+        "0.25s": 456.02,
+        "1.00s": 456.02,
+        "2.00s": 455.05
+      }
+    },
+    {
+      "file": "m2_prod_ap_f16.mp4",
+      "container": {
+        "size_bytes": 15882050,
+        "duration_s": 2.467433,
+        "bit_rate": 51493353
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "90000/3001",
+        "nb_frames": 74,
+        "bit_rate": 51482229,
+        "start_time_s": 0.0,
+        "duration_s": 2.467433
+      },
+      "audio": null,
+      "av_start_delta_s": null,
+      "pts_cadence": {
+        "packet_count": 74,
+        "nominal_fps": 30,
+        "real_fps": 29.99,
+        "median_dt_ms": 33.344,
+        "max_dt_ms": 33.345,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 999,
+        "sub_lsb_y_pct": 74.932,
+        "mean_y": 496.756,
+        "p5_y": 82,
+        "p50_y": 492,
+        "p95_y": 877,
+        "p99_y": 904,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 388.703
+      },
+      "luma_timeline": {
+        "0.05s": 500.43,
+        "0.25s": 500.73,
+        "1.00s": 496.74,
+        "2.00s": 490.43
+      }
+    },
+    {
+      "file": "m2_prod_ap_f40.mp4",
+      "container": {
+        "size_bytes": 16298504,
+        "duration_s": 2.534122,
+        "bit_rate": 51452941
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "90000/3001",
+        "nb_frames": 76,
+        "bit_rate": 51442112,
+        "start_time_s": 0.0,
+        "duration_s": 2.534122
+      },
+      "audio": null,
+      "av_start_delta_s": null,
+      "pts_cadence": {
+        "packet_count": 76,
+        "nominal_fps": 30,
+        "real_fps": 29.99,
+        "median_dt_ms": 33.344,
+        "max_dt_ms": 33.345,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 933,
+        "sub_lsb_y_pct": 74.83,
+        "mean_y": 277.734,
+        "p5_y": 29,
+        "p50_y": 168,
+        "p95_y": 705,
+        "p99_y": 754,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 185.276
+      },
+      "luma_timeline": {
+        "0.05s": 276.85,
+        "0.25s": 277.46,
+        "1.00s": 277.72,
+        "2.00s": 278.06
+      }
+    },
+    {
+      "file": "m2_prod_cam0_4k30_hlg_aac.mp4",
+      "container": {
+        "size_bytes": 19095443,
+        "duration_s": 4.26,
+        "bit_rate": 35859986
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "90000/3001",
+        "nb_frames": 120,
+        "bit_rate": 37818493,
+        "start_time_s": 0.1509,
+        "duration_s": 4.001333
+      },
+      "audio": {
+        "codec_name": "aac",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bit_rate": 320000,
+        "start_time_s": 0.0,
+        "duration_s": 4.26,
+        "nb_frames": 203
+      },
+      "av_start_delta_s": 0.1509,
+      "pts_cadence": {
+        "packet_count": 120,
+        "nominal_fps": 30,
+        "real_fps": 29.99,
+        "median_dt_ms": 33.344,
+        "max_dt_ms": 33.345,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 993,
+        "sub_lsb_y_pct": 75.236,
+        "mean_y": 495.344,
+        "p5_y": 83,
+        "p50_y": 498,
+        "p95_y": 870,
+        "p99_y": 905,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 373.846
+      }
+    },
+    {
+      "file": "m2_prod_cam0_4k30_oclog2_aac.mp4",
+      "container": {
+        "size_bytes": 19769814,
+        "duration_s": 4.204771,
+        "bit_rate": 37614060
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 2160,
+        "height": 3840,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": null,
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "1800000/60457",
+        "nb_frames": 120,
+        "bit_rate": 38907744,
+        "start_time_s": 0.0,
+        "duration_s": 4.030433
+      },
+      "audio": {
+        "codec_name": "aac",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bit_rate": 320001,
+        "start_time_s": 0.172771,
+        "duration_s": 4.032,
+        "nb_frames": 189
+      },
+      "av_start_delta_s": 0.172771,
+      "pts_cadence": {
+        "packet_count": 120,
+        "nominal_fps": 30,
+        "real_fps": 29.7714,
+        "median_dt_ms": 33.344,
+        "max_dt_ms": 66.689,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 1,
+        "first_gap_index": 1
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 888,
+        "sub_lsb_y_pct": 74.974,
+        "mean_y": 430.449,
+        "p5_y": 101,
+        "p50_y": 422,
+        "p95_y": 769,
+        "p99_y": 800,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 29.767
+      }
+    },
+    {
+      "file": "m2_prod_cam0_4k60_hlg_aac.mp4",
+      "container": {
+        "size_bytes": 37245206,
+        "duration_s": 5.62,
+        "bit_rate": 53018086
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "13275000/221539",
+        "nb_frames": 295,
+        "bit_rate": 60133888,
+        "start_time_s": 0.1753,
+        "duration_s": 4.923089
+      },
+      "audio": {
+        "codec_name": "aac",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bit_rate": 320001,
+        "start_time_s": 0.0,
+        "duration_s": 5.62,
+        "nb_frames": 267
+      },
+      "av_start_delta_s": 0.1753,
+      "pts_cadence": {
+        "packet_count": 295,
+        "nominal_fps": 60,
+        "real_fps": 59.9217,
+        "median_dt_ms": 16.689,
+        "max_dt_ms": 17.978,
+        "gap_threshold_ms": 25.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 935,
+        "sub_lsb_y_pct": 74.955,
+        "mean_y": 496.232,
+        "p5_y": 85,
+        "p50_y": 500,
+        "p95_y": 864,
+        "p99_y": 894,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 365.637
+      }
+    },
+    {
+      "file": "m2_prod_cam0_4k60_oclog2_aac.mp4",
+      "container": {
+        "size_bytes": 49746016,
+        "duration_s": 5.185084,
+        "bit_rate": 76752493
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 2160,
+        "height": 3840,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": null,
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "21420000/453209",
+        "nb_frames": 238,
+        "bit_rate": 78690032,
+        "start_time_s": 0.0,
+        "duration_s": 5.035644
+      },
+      "audio": {
+        "codec_name": "aac",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bit_rate": 320000,
+        "start_time_s": 0.150417,
+        "duration_s": 5.034667,
+        "nb_frames": 236
+      },
+      "av_start_delta_s": 0.150417,
+      "pts_cadence": {
+        "packet_count": 238,
+        "nominal_fps": 60,
+        "real_fps": 47.2332,
+        "median_dt_ms": 16.689,
+        "max_dt_ms": 50.722,
+        "gap_threshold_ms": 25.0,
+        "dropped_frames": 59,
+        "first_gap_index": 1
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 880,
+        "sub_lsb_y_pct": 75.002,
+        "mean_y": 434.433,
+        "p5_y": 118,
+        "p50_y": 416,
+        "p95_y": 765,
+        "p99_y": 797,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 29.635
+      }
+    },
+    {
+      "file": "m2_prod_cam4_4k60_hlg_aac.mp4",
+      "container": {
+        "size_bytes": 28239438,
+        "duration_s": 4.46,
+        "bit_rate": 50653700
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "10890000/181469",
+        "nb_frames": 242,
+        "bit_rate": 55639170,
+        "start_time_s": 0.1401,
+        "duration_s": 4.032644
+      },
+      "audio": {
+        "codec_name": "aac",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bit_rate": 320001,
+        "start_time_s": 0.0,
+        "duration_s": 4.46,
+        "nb_frames": 213
+      },
+      "av_start_delta_s": 0.1401,
+      "pts_cadence": {
+        "packet_count": 242,
+        "nominal_fps": 60,
+        "real_fps": 60.0101,
+        "median_dt_ms": 16.656,
+        "max_dt_ms": 17.989,
+        "gap_threshold_ms": 25.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 978,
+        "sub_lsb_y_pct": 75.035,
+        "mean_y": 521.986,
+        "p5_y": 108,
+        "p50_y": 609,
+        "p95_y": 878,
+        "p99_y": 926,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 454.823
+      }
+    },
+    {
+      "file": "m2_prod_cam5_4k60_hlg_aac.mp4",
+      "container": {
+        "size_bytes": 32248913,
+        "duration_s": 4.64,
+        "bit_rate": 55601574
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "5445000/90677",
+        "nb_frames": 242,
+        "bit_rate": 63619902,
+        "start_time_s": 0.103,
+        "duration_s": 4.030089
+      },
+      "audio": {
+        "codec_name": "aac",
+        "sample_rate": 48000,
+        "channels": 2,
+        "bit_rate": 320000,
+        "start_time_s": 0.0,
+        "duration_s": 4.64,
+        "nb_frames": 221
+      },
+      "av_start_delta_s": 0.103,
+      "pts_cadence": {
+        "packet_count": 242,
+        "nominal_fps": 60,
+        "real_fps": 60.0483,
+        "median_dt_ms": 16.656,
+        "max_dt_ms": 16.767,
+        "gap_threshold_ms": 25.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 869,
+        "sub_lsb_y_pct": 75.001,
+        "mean_y": 377.246,
+        "p5_y": 92,
+        "p50_y": 340,
+        "p95_y": 802,
+        "p99_y": 868,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 456.008
+      }
+    },
+    {
+      "file": "m2_prod_smooth_off.mp4",
+      "container": {
+        "size_bytes": 14750794,
+        "duration_s": 2.467433,
+        "bit_rate": 47825554
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "90000/3001",
+        "nb_frames": 74,
+        "bit_rate": 47814430,
+        "start_time_s": 0.0,
+        "duration_s": 2.467433
+      },
+      "audio": null,
+      "av_start_delta_s": null,
+      "pts_cadence": {
+        "packet_count": 74,
+        "nominal_fps": 30,
+        "real_fps": 29.99,
+        "median_dt_ms": 33.344,
+        "max_dt_ms": 33.345,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 981,
+        "sub_lsb_y_pct": 74.908,
+        "mean_y": 451.27,
+        "p5_y": 66,
+        "p50_y": 397,
+        "p95_y": 854,
+        "p99_y": 884,
+        "clip_1020_plus_pct": 0.0,
+        "laplacian_abs_mean": 355.161
+      }
+    },
+    {
+      "file": "m2_prod_smooth_on.mp4",
+      "container": {
+        "size_bytes": 17645795,
+        "duration_s": 2.400756,
+        "bit_rate": 58800794
+      },
+      "video": {
+        "codec_name": "hevc",
+        "profile": "Main 10",
+        "width": 3840,
+        "height": 2160,
+        "pix_fmt": "yuv420p10le",
+        "color_primaries": "bt2020",
+        "color_transfer": "arib-std-b67",
+        "color_space": "bt2020nc",
+        "avg_frame_rate": "90000/3001",
+        "nb_frames": 72,
+        "bit_rate": 58789378,
+        "start_time_s": 0.0,
+        "duration_s": 2.400756
+      },
+      "audio": null,
+      "av_start_delta_s": null,
+      "pts_cadence": {
+        "packet_count": 72,
+        "nominal_fps": 30,
+        "real_fps": 29.99,
+        "median_dt_ms": 33.344,
+        "max_dt_ms": 33.345,
+        "gap_threshold_ms": 50.0,
+        "dropped_frames": 0,
+        "first_gap_index": null
+      },
+      "pixel_10bit": {
+        "seek_s": 1.0,
+        "pixels": 8294400,
+        "distinct_y": 1024,
+        "sub_lsb_y_pct": 74.924,
+        "mean_y": 500.614,
+        "p5_y": 20,
+        "p50_y": 509,
+        "p95_y": 980,
+        "p99_y": 997,
+        "clip_1020_plus_pct": 0.0949,
+        "laplacian_abs_mean": 517.275
+      }
+    }
+  ],
+  "comparisons": {
+    "aperture": {
+      "f16_mean_y": 496.756,
+      "f40_mean_y": 277.734,
+      "auto_mean_y": 456.029,
+      "f16_p50_y": 492,
+      "f40_p50_y": 168,
+      "auto_p50_y": 397,
+      "f16_to_f40_mean_ratio": 1.7886,
+      "code_domain_log2_ratio": 0.8388,
+      "aperture_sustained_ok": true,
+      "f16_timeline": {
+        "0.05s": 500.43,
+        "0.25s": 500.73,
+        "1.00s": 496.74,
+        "2.00s": 490.43
+      },
+      "f40_timeline": {
+        "0.05s": 276.85,
+        "0.25s": 277.46,
+        "1.00s": 277.72,
+        "2.00s": 278.06
+      },
+      "auto_timeline": {
+        "0.05s": 457.44,
+        "0.25s": 456.02,
+        "1.00s": 456.02,
+        "2.00s": 455.05
+      }
+    },
+    "smooth_isp": {
+      "smooth_on_mean_y": 500.614,
+      "smooth_off_mean_y": 451.27,
+      "smooth_on_p99_y": 997,
+      "smooth_off_p99_y": 884,
+      "smooth_on_clip_1020_plus_pct": 0.0949,
+      "smooth_off_clip_1020_plus_pct": 0.0,
+      "smooth_on_laplacian_abs_mean": 517.275,
+      "smooth_off_laplacian_abs_mean": 355.161,
+      "laplacian_on_vs_off_ratio": 1.4565,
+      "laplacian_delta_on_minus_off": 162.114
+    },
+    "gates": [
+      {
+        "file": "m2_dual_4k30.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_dual_4k60.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_ap_auto.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_ap_f16.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_ap_f40.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_cam0_4k30_hlg_aac.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_cam0_4k30_oclog2_aac.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_cam0_4k60_hlg_aac.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_cam0_4k60_oclog2_aac.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_cam4_4k60_hlg_aac.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_cam5_4k60_hlg_aac.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_smooth_off.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      },
+      {
+        "file": "m2_prod_smooth_on.mp4",
+        "av_sync_clean": true,
+        "ten_bit_genuine": true,
+        "direct_fps60_clean": true,
+        "all_gates_pass": true
+      }
+    ]
+  }
+}

@@ -1410,6 +1410,11 @@ class Camera2PreviewEngine(
                             greyReference = logGreyReference,
                             useZeroCopyVideoImageReader = selectedLogProfile.huaweiCuvaHdr ||
                                 (requestedTargetFps >= 60 && OpenCineLogGpuPipeline.prefersZeroCopyVideoInput(selectedLogProfile.size, requestedTargetFps)),
+                            sourcePrimaries = if (selectedLogProfile.huaweiCuvaHdr) {
+                                OpenCineLogSourcePrimaries.BT2020_NATIVE
+                            } else {
+                                OpenCineLogSourcePrimaries.BT709_QUIRK
+                            },
                         ) { code, message -> listener.onFailure(code, message, false) }
                     } catch (failure: Throwable) {
                         observeFailedInitialization(failure)

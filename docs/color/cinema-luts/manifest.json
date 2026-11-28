@@ -1,0 +1,57 @@
+{
+  "artifacts": {
+    "dctl/oclog2-to-acescct.dctl": {
+      "bytes": 925,
+      "sha256": "d7931e59efc893ca9c919bb7818ce019d1ea236fdb5e5a2e715cd1a8c23292b0"
+    },
+    "dctl/oclog2-to-dwg-intermediate.dctl": {
+      "bytes": 933,
+      "sha256": "771b13723ceeb0d89111eb8846a7e489a1fef7f7b780c0943149b73ce8a23b10"
+    },
+    "dctl/oclog3-to-acescct.dctl": {
+      "bytes": 1076,
+      "sha256": "864ed3e6e85768c944f8b6d3741495873f69694fd06557299ea919ad09b90b55"
+    },
+    "dctl/oclog3-to-dwg-intermediate.dctl": {
+      "bytes": 1084,
+      "sha256": "aaac91a4a352210b28934e6e687e66332d07a3e100a37b72fbcc6398736cd73c"
+    },
+    "dctl/oclog3-v1-inverse.dctl": {
+      "bytes": 872,
+      "sha256": "b0dca43850fde46b9b5163fc39e87b863acf49faeebcc6e2b88665f39f152bd4"
+    },
+    "dctl/oclog3-v1.dctl": {
+      "bytes": 872,
+      "sha256": "a795beea2a456d667534d4af487add80f1f62e35f7f58c86164420aec9e960a1"
+    },
+    "technical/OCLog2_BT2020_HLG_to_Rec709_33.cube": {
+      "bytes": 970495,
+      "sha256": "a329a73c76982f6312e527d3cabd03ddd8461018258af6c8b8fefd875fc56678"
+    },
+    "technical/OCLog2_BT2020_Scene_to_Rec709_33.cube": {
+      "bytes": 970489,
+      "sha256": "eab9b9e94eba31d96c73100205b36b06c9fe5c2e5aa866e6faa76053de03532d"
+    },
+    "technical/OCLog2_BT2020_to_ACEScct_33.cube": {
+      "bytes": 970490,
+      "sha256": "8c50a0ba8708d81db62a1c77c49851386c93f40a6431931506e5c66bfa0f2a5b"
+    },
+    "technical/OCLog2_BT2020_to_DWG_Intermediate_33.cube": {
+      "bytes": 970499,
+      "sha256": "744cd5872de4b393ee252a64ac34fbd98aeeb65e8f156473374f8090b73bc52d"
+    },
+    "technical/OCLog3_BT2020_to_ACEScct_33.cube": {
+      "bytes": 970490,
+      "sha256": "5c063f51d01add6baca1cf18ce4b4c27326f0a1e3176c8ac31e74f444d4a2b9d"
+    },
+    "technical/OCLog3_BT2020_to_DWG_Intermediate_33.cube": {
+      "bytes": 970499,
+      "sha256": "2000f439df8a0f8558aab15bbb06aabaf644de89666e5c2f53c18190c12d1385"
+    },
+    "technical/OCLog3_BT2020_to_Rec709_33.cube": {
+      "bytes": 970485,
+      "sha256": "7ef5eb796baec185ce87f722df31df5835f7bb35078410e822c25d1dc4551d12"
+    }
+  },
+  "schema": "opencinecam-cinema-luts-v1"
+}

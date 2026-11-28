@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+// OpenCineCam OCLog3 v0.008 inverse (BT.2020 scene-linear [0, 16] <-> OCLog3 [0.095, 0.920])
+__DEVICE__ float oclog3_encode(float x) {
+    x = _fmaxf(0.0f, _fminf(16.0f, x));
+    if (x < 0.008000000000000f) return 5.570237810615516f * x + 0.095000f;
+    return 0.117705788336553f * _logf(x + 0.013131196250227f) + 0.593553697221409f;
+}
+__DEVICE__ float oclog3_decode(float y) {
+    y = _fmaxf(0.095000f, _fminf(0.920000f, y));
+    if (y < 0.139561902484924f) return _fmaxf(0.0f, (y - 0.095000f) / 5.570237810615516f);
+    return _fmaxf(0.0f, _fminf(16.0f, _expf((y - 0.593553697221409f) / 0.117705788336553f) - 0.013131196250227f));
+}
+__DEVICE__ float3 transform(int p_Width, int p_Height, int p_X, int p_Y, float p_R, float p_G, float p_B) {
+    return make_float3(oclog3_decode(p_R), oclog3_decode(p_G), oclog3_decode(p_B));
+}

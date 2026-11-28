@@ -7,7 +7,15 @@ enum class MonitorAspectGuide(val width: Int, val height: Int) {
     NONE(0, 0), WIDE(16, 9), PHOTO(4, 3), SQUARE(1, 1), CINEMA(239, 100)
 }
 /** Signal coordinates, not a claim of sensor exposure, HDR delivery or display colorimetry. */
-enum class MonitoringSignalDomain { ISP_YUV_ESTIMATED_SDR, SDR_BT709_CODE, OCLOG2_CODE }
+enum class MonitoringSignalDomain {
+    ISP_YUV_ESTIMATED_SDR,
+    SDR_BT709_CODE,
+    OCLOG2_CODE,
+    HLG10_BT2020_CODE,
+}
+
+internal fun MonitoringSignalDomain.usesBt2020Weights(): Boolean =
+    this == MonitoringSignalDomain.OCLOG2_CODE || this == MonitoringSignalDomain.HLG10_BT2020_CODE
 
 data class MonitoringOptions(
     val waveformEnabled: Boolean = false,

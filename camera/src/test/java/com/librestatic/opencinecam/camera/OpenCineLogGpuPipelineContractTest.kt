@@ -56,6 +56,25 @@ class OpenCineLogGpuPipelineContractTest {
 
         val hlgDithered = OpenCineLogGpuPipeline.hlgSignalShader(shaderYcbcr = true, lens = true, dither8Bit = true)
         assertTrue(hlgDithered.contains("occTpdfDither8("))
+
+        // Native BT.2020 Huawei CUVA HLG removes the Razr bt709ToBt2020 quirk around the camera sample.
+        val nativeBt2020 = OpenCineLogGpuPipeline.transformShader(
+            OpenCineLogSourcePath.HLG10_BT2020,
+            shaderYcbcr = true,
+            lens = true,
+            dither8Bit = true,
+            sourcePrimaries = OpenCineLogSourcePrimaries.BT2020_NATIVE,
+        )
+        assertTrue(nativeBt2020.contains("uSceneGain * inverseHlg(lensCorrect("))
+        assertFalse(nativeBt2020.contains("bt709ToBt2020(inverseHlg("))
+        assertNotEquals(
+            OpenCineLogGpuPipeline.TRANSFORM_SHA256,
+            OpenCineLogGpuPipeline.transformSha256(
+                OpenCineLogSourcePath.HLG10_BT2020,
+                shaderYcbcr = true,
+                sourcePrimaries = OpenCineLogSourcePrimaries.BT2020_NATIVE,
+            ),
+        )
     }
 
     @Test

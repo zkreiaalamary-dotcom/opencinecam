@@ -6,6 +6,7 @@
     <string name="scope_domain_isp">SDR est.</string>
     <string name="scope_domain_sdr">SDR</string>
     <string name="scope_domain_log">OC-Log2</string>
+    <string name="scope_domain_hlg" translatable="false">HLG</string>
     <string name="scope_domain_waiting">No signal</string>
     <string name="scope_black">Black</string>
     <string name="scope_shadow">Shadow</string>

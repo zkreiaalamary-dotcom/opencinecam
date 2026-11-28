@@ -70,7 +70,8 @@ data class OpenCineLogYcbcrConversion(
                 RANGE_LIMITED -> false
                 else -> null
             }
-            return create(standard ?: Standard.BT601, range ?: false, bitDepth, standard != null && range != null)
+            val defaultStandard = if (sourcePath == OpenCineLogSourcePath.HLG10_BT2020) Standard.BT2020 else Standard.BT601
+            return create(standard ?: defaultStandard, range ?: false, bitDepth, standard != null && range != null)
         }
 
         fun create(standard: Standard, fullRange: Boolean, bitDepth: Int, fromDataSpace: Boolean = true): OpenCineLogYcbcrConversion {

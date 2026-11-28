@@ -69,5 +69,10 @@ class OpenCineLogYcbcrConversionTest {
         assertEquals("BT709/limited/8-bit", bt709.label)
         val jfif = OpenCineLogYcbcrConversion.forDataSpace(146931712, OpenCineLogSourcePath.SDR_BT709_ISP)
         assertEquals("BT601/full/8-bit", jfif.label)
+
+        val hlgUnspecified = OpenCineLogYcbcrConversion.forDataSpace(null, OpenCineLogSourcePath.HLG10_BT2020)
+        assertFalse(hlgUnspecified.fromDataSpace)
+        assertEquals("BT2020/limited/10-bit (default)", hlgUnspecified.label)
+        assertEquals(hlgUnspecified, OpenCineLogYcbcrConversion.forDataSpace(0, OpenCineLogSourcePath.HLG10_BT2020))
     }
 }

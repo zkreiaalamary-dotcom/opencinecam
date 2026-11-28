@@ -1,0 +1,1319 @@
+{
+  "probe": "17A_native_log_and_vendor_tags",
+  "lockedExpNs": 17220000,
+  "lockedIso": 800,
+  "clockDiagnostic": {
+    "timestampSourceChar": 1,
+    "elapsedRealtimeNanos": 50835118360937,
+    "systemNanoTime": 27123407379695,
+    "imageTimestampNs": 27123319372476,
+    "bootMinusImageSec": 23711.798988461,
+    "monoMinusImageSec": 0.088007219,
+    "sensorTimestampNs": 50835363795000,
+    "bootMinusSensorSec": 0.051605
+  },
+  "cameraKitProbe": {
+    "packagePresent": false,
+    "classLoaded": false,
+    "className": null
+  },
+  "advertisedRequestKeys": [
+    "android.edge.mode",
+    "android.lens.aperture",
+    "android.noiseReduction.mode",
+    "com.huawei.capture.metadata.cameraSessionSceneMode",
+    "com.huawei.capture.metadata.stellarRepairMode",
+    "com.huawei.capture.metadata.dmWaterMarkMode",
+    "com.huawei.capture.metadata.hwTofRepairMode",
+    "com.huawei.capture.metadata.cuvaStateVideoMode"
+  ],
+  "advertisedResultKeys": [
+    "com.huawei.capture.metadata.focusVcmValue",
+    "com.huawei.capture.metadata.cameraLaserData",
+    "com.huawei.capture.metadata.lcdFlashCompensateCCT",
+    "com.huawei.capture.metadata.denseMemMultiplexing",
+    "com.huawei.capture.metadata.superSlowMotionStatus",
+    "com.huawei.device.capabilities.DmapCameraAlgorithmAlignLimited",
+    "com.huawei.capture.metadata.hw_algo_ae_lv",
+    "com.huawei.capture.metadata.isoState",
+    "com.huawei.capture.metadata.needLcdCompensate",
+    "com.huawei.capture.metadata.hwFaceInfos",
+    "com.huawei.capture.metadata.hwMoreLandmarks",
+    "com.huawei.capture.metadata.faceAttrInfo",
+    "com.huawei.capture.metadata.hwFaceRects",
+    "com.huawei.capture.metadata.faceDistanceFlag",
+    "com.huawei.capture.metadata.hwLandmarks",
+    "com.huawei.capture.metadata.dualSensorAbnormal",
+    "com.huawei.capture.metadata.lightPaintingExposureTime",
+    "com.huawei.capture.metadata.exposureStateHint",
+    "com.huawei.capture.metadata.frameLuminance",
+    "com.huawei.capture.metadata.hintUserValue",
+    "com.huawei.capture.metadata.hw-exposure-mode-preview-state",
+    "com.huawei.capture.metadata.hwVideoBokehAfRegion",
+    "com.huawei.capture.metadata.makeUpAbnormalInfo",
+    "com.huawei.capture.metadata.hwFrontgesture",
+    "com.huawei.capture.metadata.smartSuggestHint",
+    "com.huawei.capture.metadata.smartSuggestSceneArray",
+    "com.huawei.capture.metadata.smartFocusUploadLocation",
+    "com.huawei.capture.metadata.fairlightValidFaceCheck",
+    "com.huawei.capture.metadata.mdRoiArea",
+    "com.huawei.capture.metadata.foodcategory",
+    "com.huawei.capture.metadata.foodheatmap",
+    "com.huawei.capture.metadata.dfRepairCaptured",
+    "com.huawei.capture.metadata.superCameraExposureTime",
+    "com.huawei.capture.metadata.tofSensorAbnormal",
+    "com.huawei.capture.metadata.currentPpAlgo",
+    "com.huawei.capture.metadata.hw_algo_mean_y",
+    "com.huawei.capture.metadata.mscSensorAbnormal",
+    "com.huawei.capture.metadata.hw3DModelMode",
+    "com.huawei.capture.metadata.apertureMode",
+    "com.huawei.capture.metadata.apertureMonoMode",
+    "com.huawei.capture.metadata.arCalorieMode",
+    "com.huawei.capture.metadata.hwDfRepairMode",
+    "com.huawei.capture.metadata.hwDmapFormat",
+    "com.huawei.capture.metadata.hwDmapSize",
+    "com.huawei.capture.metadata.dualPrimaryMonoMode",
+    "com.huawei.capture.metadata.hwTofLatinErrorCheckResult",
+    "com.huawei.capture.metadata.hwTofRepairPowerCheckResult",
+    "com.huawei.capture.metadata.hwTofRepairPdCurrentError",
+    "com.huawei.capture.metadata.multiCameraMask",
+    "com.huawei.capture.metadata.portraitMode"
+  ],
+  "vendorSweeps": [
+    {
+      "arm": "baseline_locked",
+      "ok": true,
+      "applied": "default",
+      "stats": {
+        "yMean": 58.48940972222222,
+        "yStd": 46.271750054690976,
+        "yP01": 7,
+        "yP50": 46,
+        "yP99": 226,
+        "uMean": 122.09965277777778,
+        "vMean": 131.60416666666666,
+        "chromaMagMean": 14.319791666666667,
+        "laplacianEnergy": 29.837810127327447,
+        "flatPatchNoiseStd": 0.4568809849129202
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "colorMode_0",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.44223958333333,
+        "yStd": 46.274520120098245,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 226,
+        "uMean": 122.0592361111111,
+        "vMean": 131.57493055555557,
+        "chromaMagMean": 14.3475,
+        "laplacianEnergy": 29.807138173785003,
+        "flatPatchNoiseStd": 0.41339864235384227
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "colorMode_1",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.611232638888886,
+        "yStd": 49.34933744708953,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 244,
+        "uMean": 121.05993055555555,
+        "vMean": 131.92319444444445,
+        "chromaMagMean": 16.356319444444445,
+        "laplacianEnergy": 32.26182949494822,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "colorMode_2",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 38.082378472222224,
+        "yStd": 40.13895960747672,
+        "yP01": 2,
+        "yP50": 20,
+        "yP99": 185,
+        "uMean": 123.24826388888889,
+        "vMean": 131.13111111111112,
+        "chromaMagMean": 11.444652777777778,
+        "laplacianEnergy": 26.83286943180778,
+        "flatPatchNoiseStd": 0.4496092053105675
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "colorMode_100",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.17986111111111,
+        "yStd": 49.106799823136505,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.17569444444445,
+        "vMean": 131.4351388888889,
+        "chromaMagMean": 14.412222222222223,
+        "laplacianEnergy": 31.99261307968867,
+        "flatPatchNoiseStd": 0.4496092053105675
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "hwSensorColorMode_0",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.11328125,
+        "yStd": 48.98577561391968,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.18701388888888,
+        "vMean": 131.45159722222223,
+        "chromaMagMean": 14.34125,
+        "laplacianEnergy": 31.77954170269504,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "hwSensorColorMode_1",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.04670138888889,
+        "yStd": 48.99773527455969,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 122.14909722222222,
+        "vMean": 131.40583333333333,
+        "chromaMagMean": 14.367569444444445,
+        "laplacianEnergy": 31.894606714929093,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "hwSensorColorMode_2",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.95192708333333,
+        "yStd": 48.86435339534008,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 122.17326388888888,
+        "vMean": 131.53694444444446,
+        "chromaMagMean": 14.352847222222222,
+        "laplacianEnergy": 31.550514776131447,
+        "flatPatchNoiseStd": 0.42847841252506524
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "edgeMode_OFF",
+      "ok": true,
+      "applied": "OFF",
+      "stats": {
+        "yMean": 58.975520833333334,
+        "yStd": 48.90356253432031,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 122.04430555555555,
+        "vMean": 131.5367361111111,
+        "chromaMagMean": 14.444097222222222,
+        "laplacianEnergy": 31.76188179904753,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 0,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "edgeMode_FAST",
+      "ok": true,
+      "applied": "FAST",
+      "stats": {
+        "yMean": 58.97935763888889,
+        "yStd": 48.93316063069699,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 244,
+        "uMean": 122.01979166666666,
+        "vMean": 131.7136111111111,
+        "chromaMagMean": 14.429930555555556,
+        "laplacianEnergy": 31.772481378020615,
+        "flatPatchNoiseStd": 0.42847841252506524
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "edgeMode_HQ",
+      "ok": true,
+      "applied": "HQ",
+      "stats": {
+        "yMean": 59.016336805555554,
+        "yStd": 48.9301521067748,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 121.84534722222222,
+        "vMean": 131.61263888888888,
+        "chromaMagMean": 14.594791666666667,
+        "laplacianEnergy": 31.772628911008713,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 2,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "nrMode_OFF",
+      "ok": true,
+      "applied": "OFF",
+      "stats": {
+        "yMean": 59.07685763888889,
+        "yStd": 48.93724488212781,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 121.74902777777778,
+        "vMean": 131.53194444444443,
+        "chromaMagMean": 14.563611111111111,
+        "laplacianEnergy": 31.705984910843988,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 0,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "nrMode_FAST",
+      "ok": true,
+      "applied": "FAST",
+      "stats": {
+        "yMean": 59.13131944444444,
+        "yStd": 48.898911581083496,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 121.73902777777778,
+        "vMean": 131.43055555555554,
+        "chromaMagMean": 14.586944444444445,
+        "laplacianEnergy": 31.54306855096871,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "nrMode_HQ",
+      "ok": true,
+      "applied": "HQ",
+      "stats": {
+        "yMean": 59.10767361111111,
+        "yStd": 48.87821000546066,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 121.83458333333333,
+        "vMean": 131.41270833333334,
+        "chromaMagMean": 14.539375,
+        "laplacianEnergy": 31.632959308027655,
+        "flatPatchNoiseStd": 0.4394487847007885
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 2,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "nrMode_MINIMAL",
+      "ok": true,
+      "applied": "MINIMAL",
+      "stats": {
+        "yMean": 59.106180555555554,
+        "yStd": 48.88560743796185,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 121.9588888888889,
+        "vMean": 131.3111111111111,
+        "chromaMagMean": 14.466805555555556,
+        "laplacianEnergy": 31.77661067689742,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 3,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "contrast_0",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.04967013888889,
+        "yStd": 48.89958228308945,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.13541666666667,
+        "vMean": 131.36263888888888,
+        "chromaMagMean": 14.402083333333334,
+        "laplacianEnergy": 31.850814898872247,
+        "flatPatchNoiseStd": 0.4236075534914362
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "contrast_2",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.024288194444445,
+        "yStd": 48.837981686618654,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.12666666666667,
+        "vMean": 131.3802777777778,
+        "chromaMagMean": 14.457777777777778,
+        "laplacianEnergy": 31.612475561257632,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "contrast_4",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.95489583333333,
+        "yStd": 48.83397482858214,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.22784722222222,
+        "vMean": 131.49881944444445,
+        "chromaMagMean": 14.428194444444445,
+        "laplacianEnergy": 31.732815231239726,
+        "flatPatchNoiseStd": 0.4166341133116682
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "saturation_0",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.90991319444444,
+        "yStd": 48.77004031456332,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 122.09361111111112,
+        "vMean": 131.56430555555556,
+        "chromaMagMean": 14.500277777777777,
+        "laplacianEnergy": 31.60412601623402,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "saturation_2",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.96699652777778,
+        "yStd": 48.81240703867931,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.04451388888889,
+        "vMean": 131.64583333333334,
+        "chromaMagMean": 14.478680555555556,
+        "laplacianEnergy": 31.85436042016505,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "saturation_4",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.92628472222222,
+        "yStd": 48.740793469149295,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 121.97569444444444,
+        "vMean": 131.69625,
+        "chromaMagMean": 14.480416666666667,
+        "laplacianEnergy": 31.56068696662916,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "brightness_0",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.01567708333334,
+        "yStd": 48.741128260332346,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 121.83104166666666,
+        "vMean": 131.62805555555556,
+        "chromaMagMean": 14.627430555555556,
+        "laplacianEnergy": 31.607048594155913,
+        "flatPatchNoiseStd": 0.42847841252506524
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "brightness_2",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.014913194444446,
+        "yStd": 48.718960593865624,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 121.75972222222222,
+        "vMean": 131.5401388888889,
+        "chromaMagMean": 14.652777777777779,
+        "laplacianEnergy": 31.65588303231416,
+        "flatPatchNoiseStd": 0.42847841252506524
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "brightness_4",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 59.009236111111115,
+        "yStd": 48.747035359711035,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 121.79625,
+        "vMean": 131.50173611111111,
+        "chromaMagMean": 14.545208333333333,
+        "laplacianEnergy": 31.666805372503237,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "sharpness_0",
+      "ok": true,
+      "applied": "fail:Could not find tag for key 'com.huawei.capture.metadata.sharpness')",
+      "stats": {
+        "yMean": 59.04184027777778,
+        "yStd": 48.72065305507899,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 121.8542361111111,
+        "vMean": 131.42458333333335,
+        "chromaMagMean": 14.443819444444445,
+        "laplacianEnergy": 31.52156173425845,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "sharpness_2",
+      "ok": true,
+      "applied": "fail:Could not find tag for key 'com.huawei.capture.metadata.sharpness')",
+      "stats": {
+        "yMean": 58.94123263888889,
+        "yStd": 48.62913615521895,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.01659722222222,
+        "vMean": 131.45895833333333,
+        "chromaMagMean": 14.338888888888889,
+        "laplacianEnergy": 31.481488718681085,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "sharpness_5",
+      "ok": true,
+      "applied": "fail:Could not find tag for key 'com.huawei.capture.metadata.sharpness')",
+      "stats": {
+        "yMean": 58.933871527777775,
+        "yStd": 48.64252417664159,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.05152777777778,
+        "vMean": 131.46979166666668,
+        "chromaMagMean": 14.39048611111111,
+        "laplacianEnergy": 31.629551165712808,
+        "flatPatchNoiseStd": 0.4496092053105675
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "aiDenoiseEscape_0",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.89276041666667,
+        "yStd": 48.60955884882439,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.10833333333333,
+        "vMean": 131.49520833333332,
+        "chromaMagMean": 14.40076388888889,
+        "laplacianEnergy": 31.254927111577143,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "aiDenoiseEscape_1",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.895381944444445,
+        "yStd": 48.63081862708287,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.13819444444445,
+        "vMean": 131.5561111111111,
+        "chromaMagMean": 14.382361111111111,
+        "laplacianEnergy": 31.479891068214748,
+        "flatPatchNoiseStd": 0.4236075534914362
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "frameLossless_0",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.95868055555555,
+        "yStd": 48.67522963688524,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.03861111111111,
+        "vMean": 131.5261111111111,
+        "chromaMagMean": 14.553194444444445,
+        "laplacianEnergy": 31.298129048625967,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "frameLossless_1",
+      "ok": true,
+      "applied": "ByteArray",
+      "stats": {
+        "yMean": 58.90986111111111,
+        "yStd": 48.62774378128691,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 242,
+        "uMean": 122.093125,
+        "vMean": 131.62479166666665,
+        "chromaMagMean": 14.492916666666666,
+        "laplacianEnergy": 31.545939274686724,
+        "flatPatchNoiseStd": 0.4330127018922193
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaManual_1.6",
+      "ok": true,
+      "applied": "FloatArray",
+      "stats": {
+        "yMean": 71.56380208333333,
+        "yStd": 53.843747304014855,
+        "yP01": 10,
+        "yP50": 55,
+        "yP99": 249,
+        "uMean": 120.7461111111111,
+        "vMean": 132.30118055555556,
+        "chromaMagMean": 17.072569444444444,
+        "laplacianEnergy": 31.667853596176816,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaManual_2.0",
+      "ok": true,
+      "applied": "FloatArray",
+      "stats": {
+        "yMean": 58.74276041666667,
+        "yStd": 48.09838937465219,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 240,
+        "uMean": 121.86027777777778,
+        "vMean": 131.4478472222222,
+        "chromaMagMean": 14.504930555555555,
+        "laplacianEnergy": 31.181744625929234,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaManual_2.8",
+      "ok": true,
+      "applied": "FloatArray",
+      "stats": {
+        "yMean": 38.344027777777775,
+        "yStd": 36.56366943655813,
+        "yP01": 4,
+        "yP50": 26,
+        "yP99": 187,
+        "uMean": 123.76381944444445,
+        "vMean": 130.68298611111112,
+        "chromaMagMean": 10.363888888888889,
+        "laplacianEnergy": 25.775969240317185,
+        "flatPatchNoiseStd": 0.4236075534914362
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaManual_4.0",
+      "ok": true,
+      "applied": "FloatArray",
+      "stats": {
+        "yMean": 22.832586805555554,
+        "yStd": 24.335805608770826,
+        "yP01": 2,
+        "yP50": 14,
+        "yP99": 123,
+        "uMean": 125.55715277777777,
+        "vMean": 130.1770138888889,
+        "chromaMagMean": 6.748055555555555,
+        "laplacianEnergy": 17.425849353602377,
+        "flatPatchNoiseStd": 0.41339864235384227
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaCombo_1.6",
+      "ok": true,
+      "applied": "manual=FloatArray,init=FloatArray,ap=IntArray,mode=ByteArray",
+      "stats": {
+        "yMean": 72.25550347222222,
+        "yStd": 54.66335209009492,
+        "yP01": 10,
+        "yP50": 56,
+        "yP99": 250,
+        "uMean": 120.35409722222222,
+        "vMean": 132.28340277777778,
+        "chromaMagMean": 17.259166666666665,
+        "laplacianEnergy": 32.13214711892472,
+        "flatPatchNoiseStd": 0.4568809849129202
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaCombo_2.0",
+      "ok": true,
+      "applied": "manual=FloatArray,init=FloatArray,ap=IntArray,mode=ByteArray",
+      "stats": {
+        "yMean": 59.072552083333335,
+        "yStd": 48.87904959865142,
+        "yP01": 7,
+        "yP50": 45,
+        "yP99": 243,
+        "uMean": 121.93694444444445,
+        "vMean": 131.5498611111111,
+        "chromaMagMean": 14.40263888888889,
+        "laplacianEnergy": 31.766250489141598,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaCombo_2.8",
+      "ok": true,
+      "applied": "manual=FloatArray,init=FloatArray,ap=IntArray,mode=ByteArray",
+      "stats": {
+        "yMean": 38.52996527777778,
+        "yStd": 37.11278378318829,
+        "yP01": 4,
+        "yP50": 26,
+        "yP99": 192,
+        "uMean": 123.64069444444445,
+        "vMean": 130.48131944444444,
+        "chromaMagMean": 10.393541666666666,
+        "laplacianEnergy": 26.39969289068004,
+        "flatPatchNoiseStd": 0.4496092053105675
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    },
+    {
+      "arm": "vaCombo_4.0",
+      "ok": true,
+      "applied": "manual=FloatArray,init=FloatArray,ap=IntArray,mode=ByteArray",
+      "stats": {
+        "yMean": 22.68362847222222,
+        "yStd": 24.321388250211434,
+        "yP01": 1,
+        "yP50": 14,
+        "yP99": 123,
+        "uMean": 125.53673611111111,
+        "vMean": 130.05395833333333,
+        "chromaMagMean": 6.719444444444444,
+        "laplacianEnergy": 17.592013063066748,
+        "flatPatchNoiseStd": 0.4416654382844553
+      },
+      "meta": {
+        "expNs": 17220000,
+        "iso": 800,
+        "lensAperture": 2,
+        "edgeMode": 1,
+        "nrMode": 1,
+        "vaFNumber": null,
+        "colorModeRes": null
+      },
+      "privFmtHex": "0x22"
+    }
+  ],
+  "cuvaModeSweep": [
+    {
+      "cuvaMode": 0,
+      "ok": true,
+      "privFrames": 10,
+      "hwFmtHex": "0x22",
+      "stats": {
+        "yMean": 57.87121527777778,
+        "yStd": 45.780650152484846,
+        "yP01": 8,
+        "yP50": 46,
+        "yP99": 224,
+        "uMean": 124.14215277777778,
+        "vMean": 132.20805555555555,
+        "chromaMagMean": 11.129375,
+        "laplacianEnergy": 30.09977793845736,
+        "flatPatchNoiseStd": 0
+      }
+    },
+    {
+      "cuvaMode": 1,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 2,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 3,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 5,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 6,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 8,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 9,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 10,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 11,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    },
+    {
+      "cuvaMode": 12,
+      "ok": false,
+      "error": "java.util.concurrent.TimeoutException"
+    }
+  ],
+  "healthEvents": 0,
+  "thermalEnd": {
+    "event": "telemetry",
+    "elapsedMs": 50911913,
+    "epochMs": 1795800527364,
+    "thermalStatus": 0,
+    "thermalStatusName": "NONE",
+    "headroom0s": null,
+    "headroom10s": null,
+    "headroom30s": null,
+    "batteryPercent": 24,
+    "batteryTempSource": "BatteryManager.EXTRA_TEMPERATURE",
+    "batteryTempRaw": 280,
+    "batteryTempTenthsC": 280,
+    "batteryTempC": 28,
+    "shellFrameC": 29.993,
+    "shellLevelC": null,
+    "boardHotspotC": 33.157,
+    "shellRateCPerMin": null,
+    "batteryRateCPerMin": null,
+    "rapidHeatingWarning": false,
+    "activeCaseKey": null,
+    "activeCameraId": null,
+    "batteryVoltageMv": 3612,
+    "batteryCurrentUa": -264,
+    "plugged": 2,
+    "freeBytes": 106589548544,
+    "evidenceBytes": 0,
+    "evidenceLimitBytes": 20000000000,
+    "reserveFreeBytes": 5368709120,
+    "sysZones": {
+      "soc_thermal": 30000,
+      "thermal_zone1": 31219,
+      "usb_port": 26947,
+      "cluster0": 0,
+      "cluster1": 0,
+      "cluster2": 0,
+      "gpu": 0,
+      "modem": 0,
+      "npu": 0,
+      "peri": 0,
+      "ddr": 0,
+      "isp": 0,
+      "hc": 0,
+      "system_h": 31200,
+      "charger": 32550,
+      "pa_0": 33157,
+      "pa_1": 30700,
+      "dcxo0": 32675,
+      "charger1": 32800,
+      "rfboard": 27333,
+      "pa_2": 31000,
+      "pa_s": 30300,
+      "tcxo_bds": 30400,
+      "tcxo_gnss": 29952,
+      "shell_frame": 29993,
+      "shell_front": 29993,
+      "shell_back": 29993,
+      "shell_level": 0,
+      "shell_pre": 34000,
+      "npu_thermal": 0,
+      "shell_thermal": 0,
+      "Battery": 28000,
+      "battery_gauge": 28000,
+      "bat_raw_temp": 0,
+      "bat0_raw_temp": 28000,
+      "bat1_raw_temp": 0,
+      "supply_avg": 0,
+      "supply_peak": 0
+    },
+    "sysZonesC": {
+      "soc_thermal": 30,
+      "thermal_zone1": 31.219,
+      "usb_port": 26.947,
+      "cluster0": 0,
+      "cluster1": 0,
+      "cluster2": 0,
+      "gpu": 0,
+      "modem": 0,
+      "npu": 0,
+      "peri": 0,
+      "ddr": 0,
+      "isp": 0,
+      "hc": 0,
+      "system_h": 31.2,
+      "charger": 32.55,
+      "pa_0": 33.157,
+      "pa_1": 30.7,
+      "dcxo0": 32.675,
+      "charger1": 32.8,
+      "rfboard": 27.333,
+      "pa_2": 31,
+      "pa_s": 30.3,
+      "tcxo_bds": 30.4,
+      "tcxo_gnss": 29.952,
+      "shell_frame": 29.993,
+      "shell_front": 29.993,
+      "shell_back": 29.993,
+      "shell_level": 0,
+      "shell_pre": 34,
+      "npu_thermal": 0,
+      "shell_thermal": 0,
+      "Battery": 28,
+      "battery_gauge": 28,
+      "bat_raw_temp": 0,
+      "bat0_raw_temp": 28,
+      "bat1_raw_temp": 0,
+      "supply_avg": 0,
+      "supply_peak": 0
+    },
+    "powerProfile": null
+  }
+}

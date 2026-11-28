@@ -228,6 +228,7 @@ private fun scopeDomainLabel(domain: MonitoringSignalDomain): Int = when (domain
     MonitoringSignalDomain.ISP_YUV_ESTIMATED_SDR -> R.string.scope_domain_isp
     MonitoringSignalDomain.SDR_BT709_CODE -> R.string.scope_domain_sdr
     MonitoringSignalDomain.OCLOG2_CODE -> R.string.scope_domain_log
+    MonitoringSignalDomain.HLG10_BT2020_CODE -> R.string.scope_domain_hlg
 }
 
 private fun scopeTabLabel(tab: ScopeTab, short: Boolean): Int = when (tab) {

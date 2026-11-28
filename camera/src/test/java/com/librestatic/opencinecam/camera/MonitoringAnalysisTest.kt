@@ -142,4 +142,19 @@ class MonitoringAnalysisTest {
         val slow = normal.copy(refreshHz = 1)
         assertTrue(monitoringSampleFresh(100, 3100, slow)); assertFalse(monitoringSampleFresh(100, 3101, slow))
     }
+
+    @Test fun bt2020DomainsUseBt2020WeightsAndDomainThresholds() {
+        val redSdr = analyzeMonitoringRgb(1, 1, packed(0xff0000), enabled, MonitoringSignalDomain.SDR_BT709_CODE)
+        val redLog = analyzeMonitoringRgb(1, 1, packed(0xff0000), enabled, MonitoringSignalDomain.OCLOG2_CODE)
+        // BT.2020 Kr=0.2627 gives higher red luma (~67 -> bin 16, row 47) than BT.709 Kr=0.2126 (~54 -> bin 13, row 50).
+        assertEquals(1, redSdr.waveformDensity[50 * 64])
+        assertEquals(1, redLog.waveformDensity[47 * 64])
+        // Neutral grey still centers cleanly under BT.2020.
+        val greyLog = analyzeMonitoringRgb(1, 1, packed(0x808080), enabled, MonitoringSignalDomain.HLG10_BT2020_CODE)
+        assertEquals(1, greyLog.vectorscopeCounts[32 * 64 + 32])
+        // Domain-calibrated thresholds give OCLOG2 tighter pedestal/ceiling awareness than SDR.
+        val oclThresholds = MonitoringDomainReference.defaultThresholds(MonitoringSignalDomain.OCLOG2_CODE)
+        assertEquals(0.105, oclThresholds.black, 1e-6)
+        assertEquals(0.895, oclThresholds.clip, 1e-6)
+    }
 }

@@ -264,6 +264,7 @@ internal fun analyzeRgbaFrame(
     val blueHistogram = IntArray(bins)
     val zebraHits = IntArray(16 * 9)
     val counts = IntArray(16 * 9)
+    val bt2020Luma = domain.usesBt2020Weights()
     for (displayY in 0 until height) {
         val sourceY = height - 1 - displayY
         val scopeRow = displayY % scopeStep == 0
@@ -275,7 +276,11 @@ internal fun analyzeRgbaFrame(
             val red = rgba[offset].toInt() and 0xff
             val green = rgba[offset + 1].toInt() and 0xff
             val blue = rgba[offset + 2].toInt() and 0xff
-            val y = ((54 * red + 183 * green + 19 * blue + 128) shr 8).coerceIn(0, 255)
+            val y = if (bt2020Luma) {
+                ((67 * red + 174 * green + 15 * blue + 128) shr 8).coerceIn(0, 255)
+            } else {
+                ((54 * red + 183 * green + 19 * blue + 128) shr 8).coerceIn(0, 255)
+            }
             luma?.set(displayY * width + x, y.toByte())
             if (!scopeSample) continue
             val sample = ((displayY / scopeStep) * scopeWidth + x / scopeStep) * 3
@@ -439,6 +444,13 @@ internal class GpuPipelineInitializationFailure(
  * unscaled target bitrate, VUI pass-through, async PBO scopes, frame diagnostics) without
  * altering production defaults when null.
  */
+enum class OpenCineLogSourcePrimaries {
+    /** Camera HLG10 stream advertises BT.2020 but emits BT.709 primaries (e.g. Razr HAL quirk). */
+    BT709_QUIRK,
+    /** Camera HLG10 stream emits true BT.2020 primaries (e.g. Huawei CUVA HLG 0x324); no 709->2020 gamut crush. */
+    BT2020_NATIVE,
+}
+
 data class ResearchEncoderOverride(
     val explicitHevcLevel: Int? = null,
     val colorStandard: Int? = null,
@@ -454,6 +466,7 @@ data class ResearchEncoderOverride(
     val enableRealtimeCodecKeys: Boolean = false,
     val singleContextWhen8Bit: Boolean = false,
     val previewFpsDivisor: Int = 1,
+    val useLimitedRangeForRgba8Log: Boolean = false,
 )
 
 data class BitrateResolution(
@@ -492,6 +505,7 @@ class OpenCineLogGpuPipeline(
     greyReference: OpenCineLogGreyReference = OpenCineLogGreyReference.NATIVE,
     private val researchEncoderOverride: ResearchEncoderOverride? = null,
     private val useZeroCopyVideoImageReader: Boolean = false,
+    private val sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
     private val onFailure: (String, String) -> Unit,
 ) : AutoCloseable {
     private val hisiliconMain10Workaround: Boolean = !passthroughSdr && runCatching {
@@ -715,7 +729,7 @@ class OpenCineLogGpuPipeline(
             try {
                 check(makeCurrent(pbuffer)) { "Lens correction context is unavailable." }
                 val fresh = if (passthroughSdr) linkProgram(VERTEX_SHADER, passthroughShader(spliced))
-                    else linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr, spliced))
+                    else linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr, spliced, sourcePrimaries = sourcePrimaries))
                 if (program != 0) GLES30.glDeleteProgram(program)
                 program = fresh
                 refreshMainProgramLocations()
@@ -738,7 +752,7 @@ class OpenCineLogGpuPipeline(
         if (ditheredEncoderProgram == 0) {
             ditheredEncoderProgram = linkProgram(
                 VERTEX_SHADER,
-                transformShader(sourcePath, shaderYcbcr, lensSpliced, dither8Bit = true),
+                transformShader(sourcePath, shaderYcbcr, lensSpliced, dither8Bit = true, sourcePrimaries = sourcePrimaries),
             )
         }
         return ditheredEncoderProgram
@@ -746,9 +760,9 @@ class OpenCineLogGpuPipeline(
 
     private fun lensSplicedSha(hlgOutput: Boolean, hdr10Output: Boolean, dither8Bit: Boolean = false): String = when {
         passthroughSdr -> passthroughSha256(lens = true)
-        hdr10Output -> pqSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit)
-        hlgOutput -> hlgSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit)
-        else -> transformSha256(sourcePath, shaderYcbcr, lens = true, dither8Bit = dither8Bit)
+        hdr10Output -> pqSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit, sourcePrimaries = sourcePrimaries)
+        hlgOutput -> hlgSignalSha256(shaderYcbcr, lens = true, dither8Bit = dither8Bit, sourcePrimaries = sourcePrimaries)
+        else -> transformSha256(sourcePath, shaderYcbcr, lens = true, dither8Bit = dither8Bit, sourcePrimaries = sourcePrimaries)
     }
 
     /**
@@ -1132,8 +1146,8 @@ class OpenCineLogGpuPipeline(
                     val lensOn = lensSpliced
                     hlgSignalProgram = linkProgram(
                         VERTEX_SHADER,
-                        if (hdr10Output) pqSignalShader(shaderYcbcr, lensOn, dither8Bit = ditherTake)
-                        else hlgSignalShader(shaderYcbcr, lensOn, dither8Bit = ditherTake),
+                        if (hdr10Output) pqSignalShader(shaderYcbcr, lensOn, dither8Bit = ditherTake, sourcePrimaries = sourcePrimaries)
+                        else hlgSignalShader(shaderYcbcr, lensOn, dither8Bit = ditherTake, sourcePrimaries = sourcePrimaries),
                     )
                     hlgSignalProgramPq = hdr10Output
                 }
@@ -1201,7 +1215,15 @@ class OpenCineLogGpuPipeline(
                         setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
                     } else {
                         setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
-                        setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_FULL)
+                        setInteger(
+                            MediaFormat.KEY_COLOR_RANGE,
+                            OpenCineLogEncoderRangePolicy.mediaFormatColorRange(
+                                isHlgOrHdr10Output = false,
+                                isPassthroughOrBakedLut = false,
+                                egl8BitActive = active8BitRenderConfig,
+                                experimentalLimitedForRgba8Log = researchEncoderOverride?.useLimitedRangeForRgba8Log == true,
+                            ),
+                        )
                         // No container transfer is claimed: OCLog2 has no H.273 code, and "linear" made
                         // NLEs misread the file. Leaving the key unset aims for VUI transfer 2
                         // (unspecified); some encoders still write a default, so verify with ffprobe.
@@ -1561,7 +1583,7 @@ class OpenCineLogGpuPipeline(
             val extensions = GLES30.glGetString(GLES30.GL_EXTENSIONS).orEmpty().split(' ')
             if ("GL_EXT_YUV_target" in extensions) {
                 try {
-                    return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = true)).also { shaderYcbcr = true }
+                    return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = true, sourcePrimaries = sourcePrimaries)).also { shaderYcbcr = true }
                 } catch (failure: Exception) {
                     android.util.Log.w(LOG_TAG, "GL_EXT_YUV_target shader did not link; using the driver YCbCr conversion.", failure)
                     for (attempt in 0 until 8) if (GLES30.glGetError() == GLES30.GL_NO_ERROR) break
@@ -1569,7 +1591,7 @@ class OpenCineLogGpuPipeline(
             }
         }
         shaderYcbcr = false
-        return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = false))
+        return linkProgram(VERTEX_SHADER, transformShader(sourcePath, shaderYcbcr = false, sourcePrimaries = sourcePrimaries))
     }
 
     private fun renderLatestFrame() {
@@ -1820,7 +1842,8 @@ class OpenCineLogGpuPipeline(
         check(!forSubject || !forRecording)
         if (operatorLutProgram == 0) {
             val lensOn = lensSpliced
-            val source = if (passthroughSdr) passthroughShader(lensOn) else transformShader(sourcePath, shaderYcbcr, lensOn)
+            val source = if (passthroughSdr) passthroughShader(lensOn)
+                else transformShader(sourcePath, shaderYcbcr, lensOn, sourcePrimaries = sourcePrimaries)
             val declarations = """
                 uniform highp sampler3D uOperatorLut;
                 uniform vec3 uLutMin;
@@ -3313,9 +3336,19 @@ class OpenCineLogGpuPipeline(
             }
         """.trimIndent()
 
-        private fun fragmentShader(sourcePath: OpenCineLogSourcePath): String = when (sourcePath) {
-            OpenCineLogSourcePath.HLG10_BT2020 -> HLG_FRAGMENT_SHADER
+        private fun fragmentShader(
+            sourcePath: OpenCineLogSourcePath,
+            sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
+        ): String = when (sourcePath) {
+            OpenCineLogSourcePath.HLG10_BT2020 -> applyPrimaries(HLG_FRAGMENT_SHADER, sourcePrimaries)
             OpenCineLogSourcePath.SDR_BT709_ISP -> SDR_FRAGMENT_SHADER
+        }
+
+        private fun applyPrimaries(base: String, sourcePrimaries: OpenCineLogSourcePrimaries): String {
+            if (sourcePrimaries != OpenCineLogSourcePrimaries.BT2020_NATIVE) return base
+            val wrapped = "bt709ToBt2020(inverseHlg(texture(uTexture, vTexCoord).rgb))"
+            val nativeSample = "inverseHlg(texture(uTexture, vTexCoord).rgb)"
+            return if (base.contains(wrapped)) base.replace(wrapped, nativeSample) else base
         }
 
         /**
@@ -3329,8 +3362,18 @@ class OpenCineLogGpuPipeline(
             shaderYcbcr: Boolean,
             lens: Boolean = false,
             dither8Bit: Boolean = false,
+        ): String = transformShader(sourcePath, shaderYcbcr, lens, dither8Bit, OpenCineLogSourcePrimaries.BT709_QUIRK)
+
+        fun transformShader(
+            sourcePath: OpenCineLogSourcePath,
+            shaderYcbcr: Boolean,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+            sourcePrimaries: OpenCineLogSourcePrimaries,
         ): String {
-            val base = if (shaderYcbcr) ycbcrVariant(fragmentShader(sourcePath)) else fragmentShader(sourcePath)
+            val base = fragmentShader(sourcePath, sourcePrimaries).let {
+                if (shaderYcbcr) ycbcrVariant(it) else it
+            }
             val lensed = if (lens) LensShaderSplice.splice(base, sourceCurve(sourcePath)) else base
             return if (dither8Bit) dither8BitShader(lensed) else lensed
         }
@@ -3370,8 +3413,14 @@ class OpenCineLogGpuPipeline(
         }
 
         /** The HLG recording shader as linked; it shares the tier shader's YCbCr decoding. */
-        fun hlgSignalShader(shaderYcbcr: Boolean, lens: Boolean = false, dither8Bit: Boolean = false): String {
-            val base = if (shaderYcbcr) ycbcrVariant(HLG_SIGNAL_FRAGMENT_SHADER) else HLG_SIGNAL_FRAGMENT_SHADER
+        fun hlgSignalShader(
+            shaderYcbcr: Boolean,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+            sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
+        ): String {
+            val nativeReady = applyPrimaries(HLG_SIGNAL_FRAGMENT_SHADER, sourcePrimaries)
+            val base = if (shaderYcbcr) ycbcrVariant(nativeReady) else nativeReady
             val lensed = if (lens) LensShaderSplice.splice(base, TransferCurve.HLG) else base
             return if (dither8Bit) dither8BitShader(lensed) else lensed
         }
@@ -3380,8 +3429,14 @@ class OpenCineLogGpuPipeline(
          * The HLG recording shader with a PQ output: HLG scene light through the 1000 cd/m2 HLG OOTF
          * and the ST 2084 inverse EOTF. [HlgToPq] is its host-testable mirror.
          */
-        fun pqSignalShader(shaderYcbcr: Boolean, lens: Boolean = false, dither8Bit: Boolean = false): String {
-            val base = if (shaderYcbcr) ycbcrVariant(PQ_SIGNAL_FRAGMENT_SHADER) else PQ_SIGNAL_FRAGMENT_SHADER
+        fun pqSignalShader(
+            shaderYcbcr: Boolean,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+            sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
+        ): String {
+            val nativeReady = applyPrimaries(PQ_SIGNAL_FRAGMENT_SHADER, sourcePrimaries)
+            val base = if (shaderYcbcr) ycbcrVariant(nativeReady) else nativeReady
             val lensed = if (lens) LensShaderSplice.splice(base, TransferCurve.HLG) else base
             return if (dither8Bit) dither8BitShader(lensed) else lensed
         }
@@ -3452,8 +3507,16 @@ class OpenCineLogGpuPipeline(
             shaderYcbcr: Boolean = true,
             lens: Boolean = false,
             dither8Bit: Boolean = false,
+        ): String = transformSha256(sourcePath, shaderYcbcr, lens, dither8Bit, OpenCineLogSourcePrimaries.BT709_QUIRK)
+
+        fun transformSha256(
+            sourcePath: OpenCineLogSourcePath,
+            shaderYcbcr: Boolean = true,
+            lens: Boolean = false,
+            dither8Bit: Boolean = false,
+            sourcePrimaries: OpenCineLogSourcePrimaries,
         ): String = MessageDigest.getInstance("SHA-256")
-            .digest(transformShader(sourcePath, shaderYcbcr, lens, dither8Bit).toByteArray())
+            .digest(transformShader(sourcePath, shaderYcbcr, lens, dither8Bit, sourcePrimaries).toByteArray())
             .joinToString("") { "%02x".format(it) }
 
         /** Identity of the linked HLG recording shader. */
@@ -3461,8 +3524,9 @@ class OpenCineLogGpuPipeline(
             shaderYcbcr: Boolean = true,
             lens: Boolean = false,
             dither8Bit: Boolean = false,
+            sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
         ): String = MessageDigest.getInstance("SHA-256")
-            .digest(hlgSignalShader(shaderYcbcr, lens, dither8Bit).toByteArray())
+            .digest(hlgSignalShader(shaderYcbcr, lens, dither8Bit, sourcePrimaries).toByteArray())
             .joinToString("") { "%02x".format(it) }
 
         /** Identity of the linked PQ recording shader. */
@@ -3470,8 +3534,9 @@ class OpenCineLogGpuPipeline(
             shaderYcbcr: Boolean = true,
             lens: Boolean = false,
             dither8Bit: Boolean = false,
+            sourcePrimaries: OpenCineLogSourcePrimaries = OpenCineLogSourcePrimaries.BT709_QUIRK,
         ): String = MessageDigest.getInstance("SHA-256")
-            .digest(pqSignalShader(shaderYcbcr, lens, dither8Bit).toByteArray())
+            .digest(pqSignalShader(shaderYcbcr, lens, dither8Bit, sourcePrimaries).toByteArray())
             .joinToString("") { "%02x".format(it) }
 
         /** Backward-compatible identity of the qualified HLG transform. */

@@ -58,13 +58,18 @@ fun analyzeMonitoringRgb(width: Int, height: Int, rgb: ByteArray, options: Monit
     val waveform = if (options.waveformEnabled) IntArray(64 * 64) else IntArray(0)
     val vectors = if (options.vectorscopeEnabled) IntArray(64 * 64) else IntArray(0)
     val luma = if (options.falseColorEnabled) ByteArray(count) else ByteArray(0)
+    val bt2020 = domain.usesBt2020Weights()
     if (options.waveformEnabled || options.vectorscopeEnabled || options.falseColorEnabled) {
         for (index in 0 until count) {
             val offset = index * 3
             val r = rgb[offset].toInt() and 255
             val g = rgb[offset + 1].toInt() and 255
             val b = rgb[offset + 2].toInt() and 255
-            val y = (54 * r + 183 * g + 19 * b + 128) shr 8
+            val y = if (bt2020) {
+                (67 * r + 174 * g + 15 * b + 128) shr 8
+            } else {
+                (54 * r + 183 * g + 19 * b + 128) shr 8
+            }
             if (options.falseColorEnabled) luma[index] = y.toByte()
             if (options.waveformEnabled) {
                 val x = (index % width).toLong() * 64 / width
@@ -72,9 +77,20 @@ fun analyzeMonitoringRgb(width: Int, height: Int, rgb: ByteArray, options: Monit
             }
             if (options.vectorscopeEnabled) {
                 // Integer numerator keeps all neutral values exactly centered (no float drift).
-                val yNumerator = 2126 * r + 7152 * g + 722 * b
-                val cb = (10000 * b - yNumerator).toDouble() / (2 * 9278 * 255)
-                val cr = (10000 * r - yNumerator).toDouble() / (2 * 7874 * 255)
+                val yNumerator: Int
+                val cbDenom: Double
+                val crDenom: Double
+                if (bt2020) {
+                    yNumerator = 2627 * r + 6780 * g + 593 * b
+                    cbDenom = 2.0 * 9407.0 * 255.0
+                    crDenom = 2.0 * 7373.0 * 255.0
+                } else {
+                    yNumerator = 2126 * r + 7152 * g + 722 * b
+                    cbDenom = 2.0 * 9278.0 * 255.0
+                    crDenom = 2.0 * 7874.0 * 255.0
+                }
+                val cb = (10000 * b - yNumerator).toDouble() / cbDenom
+                val cr = (10000 * r - yNumerator).toDouble() / crDenom
                 val x = ((0.5 + cb) * 64).toInt().coerceIn(0, 63)
                 val row = ((0.5 - cr) * 64).toInt().coerceIn(0, 63)
                 vectors[row * 64 + x]++
